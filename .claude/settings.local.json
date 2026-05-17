@@ -1,0 +1,42 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(ffmpeg -ss 00:01:10 -to 00:01:15 -i \"c:\\\\Users\\\\sffra\\\\Downloads\\\\BSE 2025-2026\\\\foothill-cv\\\\video\\\\videoplayback.mp4\" -c copy \"c:\\\\Users\\\\sffra\\\\Downloads\\\\BSE 2025-2026\\\\foothill-cv\\\\video\\\\hill-laney-clip.mp4\" -y)",
+      "PowerShell(uv run ffmpeg -ss 00:01:10 -to 00:01:15 -i \"c:\\\\Users\\\\sffra\\\\Downloads\\\\BSE 2025-2026\\\\foothill-cv\\\\video\\\\videoplayback.mp4\" -c copy \"c:\\\\Users\\\\sffra\\\\Downloads\\\\BSE 2025-2026\\\\foothill-cv\\\\video\\\\hill-laney-clip.mp4\" -y)",
+      "PowerShell(uv run python -c \"import ffmpeg; print\\(ffmpeg.__file__\\)\")",
+      "PowerShell(Get-Command ffmpeg -ErrorAction SilentlyContinue; \\(Get-ChildItem \"C:\\\\Program Files\\\\ffmpeg\" -Recurse -Filter \"ffmpeg.exe\" -ErrorAction SilentlyContinue\\).FullName; \\(Get-ChildItem \"$env:LOCALAPPDATA\\\\Microsoft\\\\WinGet\\\\Packages\" -Recurse -Filter \"ffmpeg.exe\" -ErrorAction SilentlyContinue\\).FullName)",
+      "PowerShell(& \"C:\\\\Users\\\\sffra\\\\AppData\\\\Local\\\\Microsoft\\\\WinGet\\\\Packages\\\\Gyan.FFmpeg_Microsoft.Winget.Source_8wekyb3d8bbwe\\\\ffmpeg-8.1.1-full_build\\\\bin\\\\ffmpeg.exe\" -ss 00:01:10 -to 00:01:15 -i \"C:\\\\Users\\\\sffra\\\\Downloads\\\\BSE 2025-2026\\\\foothill-cv\\\\video\\\\videoplayback.mp4\" -c copy \"C:\\\\Users\\\\sffra\\\\Downloads\\\\BSE 2025-2026\\\\foothill-cv\\\\video\\\\hill-laney-clip.mp4\" -y)",
+      "PowerShell(& \"C:\\\\Users\\\\sffra\\\\AppData\\\\Local\\\\Microsoft\\\\WinGet\\\\Packages\\\\Gyan.FFmpeg_Microsoft.Winget.Source_8wekyb3d8bbwe\\\\ffmpeg-8.1.1-full_build\\\\bin\\\\ffmpeg.exe\" -ss 01:20:00 -to 01:25:00 -i \"C:\\\\Users\\\\sffra\\\\Downloads\\\\BSE 2025-2026\\\\foothill-cv\\\\video\\\\videoplayback.mp4\" -c copy \"C:\\\\Users\\\\sffra\\\\Downloads\\\\BSE 2025-2026\\\\foothill-cv\\\\video\\\\hill-laney-clip.mp4\" -y)",
+      "PowerShell(& \"C:\\\\Users\\\\sffra\\\\AppData\\\\Local\\\\Microsoft\\\\WinGet\\\\Packages\\\\Gyan.FFmpeg_Microsoft.Winget.Source_8wekyb3d8bbwe\\\\ffmpeg-8.1.1-full_build\\\\bin\\\\ffmpeg.exe\" -ss 00:26:00 -to 00:31:00 -i \"C:\\\\Users\\\\sffra\\\\Downloads\\\\BSE 2025-2026\\\\foothill-cv\\\\video\\\\videoplayback.mp4\" -c copy \"C:\\\\Users\\\\sffra\\\\Downloads\\\\BSE 2025-2026\\\\foothill-cv\\\\video\\\\hill-laney-clip.mp4\" -y)",
+      "Bash(Get-Content \"c:\\\\Users\\\\sffra\\\\Downloads\\\\BSE 2025-2026\\\\foothill-cv\\\\hill-pbp-example.html\" -TotalCount 200)",
+      "PowerShell($content = Get-Content \"c:\\\\Users\\\\sffra\\\\Downloads\\\\BSE 2025-2026\\\\foothill-cv\\\\hill-pbp-example.html\" -Raw; $idx = $content.IndexOf\\('pbp'\\); Write-Output \"Index: $idx\"; if \\($idx -ge 0\\) { $content.Substring\\($idx, 2000\\) })",
+      "PowerShell($content = Get-Content \"c:\\\\Users\\\\sffra\\\\Downloads\\\\BSE 2025-2026\\\\foothill-cv\\\\hill-pbp-example.html\" -Raw; $idx = $content.IndexOf\\('drive'\\); Write-Output \"drive index: $idx\"; if \\($idx -ge 0\\) { $content.Substring\\($idx, 3000\\) })",
+      "PowerShell($content = Get-Content \"c:\\\\Users\\\\sffra\\\\Downloads\\\\BSE 2025-2026\\\\foothill-cv\\\\hill-pbp-example.html\" -Raw; $idx = $content.IndexOf\\('<tr class=\"odd\">'\\); $content.Substring\\($idx, 3000\\))",
+      "PowerShell($content = Get-Content \"c:\\\\Users\\\\sffra\\\\Downloads\\\\BSE 2025-2026\\\\foothill-cv\\\\hill-pbp-example.html\" -Raw; $idx = $content.IndexOf\\('<tr class=\"odd\">'\\); $content.Substring\\($idx + 3000, 3000\\))",
+      "Bash(Get-ChildItem -Path \"C:\\\\Users\\\\sffra\\\\Downloads\\\\BSE 2025-2026\\\\foothill-cv\\\\pages\" -File)",
+      "Bash(Select-Object Name, Extension, Length)",
+      "PowerShell(Get-ChildItem -Path \"C:\\\\Users\\\\sffra\\\\Downloads\\\\BSE 2025-2026\\\\foothill-cv\\\\pages\" -File | Select-Object Name, Extension, @{Name=\"SizeKB\";Expression={[math]::Round\\($_.Length/1KB,2\\)}} | Sort-Object Name)",
+      "PowerShell(Get-ChildItem -Path \"C:\\\\Users\\\\sffra\\\\Downloads\\\\BSE 2025-2026\\\\foothill-cv\\\\pages\" | ForEach-Object { \"$\\($_.Name\\) - $\\($_.GetType\\(\\).Name\\) - $\\(if\\($_.PSIsContainer\\) { 'DIR' } else { $_.Extension }\\)\" } | Sort-Object)",
+      "PowerShell(\\(Get-ChildItem -Path \"C:\\\\Users\\\\sffra\\\\Downloads\\\\BSE 2025-2026\\\\foothill-cv\\\\pages\\\\1-Standings_files\" | Measure-Object\\).Count)",
+      "Bash(python -c ' *)",
+      "Bash(python -m jupyter nbconvert --to notebook --execute foothill_season_features.ipynb --output foothill_season_features_executed.ipynb)",
+      "WebFetch(domain:clubee.com)",
+      "Bash(Select-String \"Galaxy\")",
+      "Bash(py -c ' *)",
+      "Bash(py scrape_clubee.py \"c:/Users/sffra/Downloads/Galaxy Senior Team _ Musketeers Senior Team - Match - European Football Alliance \\(EFA\\).html\" test_output.csv)",
+      "Bash(tree -L 3 \"c:\\\\\\\\Users\\\\\\\\sffra\\\\\\\\Downloads\\\\\\\\BSE 2025-2026\\\\\\\\foothill-cv\" -I \".venv|__pycache__\")",
+      "Bash(find \"c:\\\\\\\\Users\\\\\\\\sffra\\\\\\\\Downloads\\\\\\\\BSE 2025-2026\\\\\\\\foothill-cv\" -maxdepth 3 -not -path \"*\\\\.venv*\" -not -path \"*__pycache__*\")",
+      "Bash(find \"c:\\\\\\\\Users\\\\\\\\sffra\\\\\\\\Downloads\\\\\\\\BSE 2025-2026\\\\\\\\foothill-cv\" -maxdepth 1 -type f)",
+      "Bash(find \"c:\\\\\\\\Users\\\\\\\\sffra\\\\\\\\Downloads\\\\\\\\BSE 2025-2026\\\\\\\\foothill-cv\" -name \"*.py\" -o -name \"README*\" -o -name \"*.md\" -o -name \"*.toml\" -o -name \"*.cfg\" -o -name \"*.yml\" -o -name \"*.yaml\")",
+      "Bash(find \"c:\\\\\\\\Users\\\\\\\\sffra\\\\\\\\Downloads\\\\\\\\BSE 2025-2026\\\\\\\\foothill-cv\" -type d -not -path \"*\\\\.venv*\" -not -path \"*__pycache__*\")",
+      "Bash(find \"c:\\\\\\\\Users\\\\\\\\sffra\\\\\\\\Downloads\\\\\\\\BSE 2025-2026\\\\\\\\foothill-cv\\\\\\\\cv\" -type f -not -path \"*\\\\.venv*\")",
+      "Bash(find \"c:\\\\\\\\Users\\\\\\\\sffra\\\\\\\\Downloads\\\\\\\\BSE 2025-2026\\\\\\\\foothill-cv\\\\\\\\pbp\" -type f -not -path \"*\\\\.venv*\" -not -path \"*\\\\_files*\")",
+      "Bash(git -C \"c:\\\\Users\\\\sffra\\\\Downloads\\\\BSE 2025-2026\\\\foothill-cv\" status)",
+      "Bash(mkdir -p 'c:\\\\Users\\\\sffra\\\\Downloads\\\\BSE 2025-2026\\\\foothill-cv/foothill/data' 'c:\\\\Users\\\\sffra\\\\Downloads\\\\BSE 2025-2026\\\\foothill-cv/efa/data')",
+      "Bash(mv 'c:\\\\Users\\\\sffra\\\\Downloads\\\\BSE 2025-2026\\\\foothill-cv/pbp' 'c:\\\\Users\\\\sffra\\\\Downloads\\\\BSE 2025-2026\\\\foothill-cv/foothill/pbp')",
+      "Bash(mv 'c:\\\\Users\\\\sffra\\\\Downloads\\\\BSE 2025-2026\\\\foothill-cv/cv' 'c:\\\\Users\\\\sffra\\\\Downloads\\\\BSE 2025-2026\\\\foothill-cv/foothill/cv')",
+      "Bash(mv 'c:\\\\Users\\\\sffra\\\\Downloads\\\\BSE 2025-2026\\\\foothill-cv/team_conference_crosswalk.csv' 'c:\\\\Users\\\\sffra\\\\Downloads\\\\BSE 2025-2026\\\\foothill-cv/foothill/data/team_conference_crosswalk.csv')",
+      "Bash(mv 'c:\\\\Users\\\\sffra\\\\Downloads\\\\BSE 2025-2026\\\\foothill-cv/foothill_season_features.ipynb' 'c:\\\\Users\\\\sffra\\\\Downloads\\\\BSE 2025-2026\\\\foothill-cv/foothill/foothill_analysis.ipynb')"
+    ]
+  }
+}

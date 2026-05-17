@@ -1,0 +1,24 @@
+[project]
+name = "foothill-cv"
+version = "0.1.0"
+description = "American football player detection and tracking using YOLOv8 and ByteTrack."
+requires-python = ">=3.11"
+dependencies = [
+    "numpy",
+    "opencv-python",
+    "ultralytics",
+    "supervision",
+    "scikit-learn",
+    "uvicorn",
+    "ffmpeg>=1.4",
+    "transformers>=5.8.1",
+    "torch>=2.12.0",
+    "pillow>=12.2.0",
+]
+
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+py-modules = []
