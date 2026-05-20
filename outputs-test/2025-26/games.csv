@@ -1,0 +1,24 @@
+season,game_id,game_date,pbp_url,schedule_home,schedule_away,home_team_canonical,away_team_canonical,team_1,team_2,schedule_row_count,unique_team_count,pairing_status
+2025-26,20250830_0ovy,20250830,https://3c2asports.org/sports/fball/2025-26/boxscores/20250830_0ovy.xml?view=plays,San Mateo,Sierra,San Mateo,,San Mateo,,1,1,single-sided
+2025-26,20250830_8cjh,20250830,https://3c2asports.org/sports/fball/2025-26/boxscores/20250830_8cjh.xml?view=plays,Monterey Peninsula,Foothill,,Foothill,Foothill,,1,1,single-sided
+2025-26,20250906_on2u,20250906,https://3c2asports.org/sports/fball/2025-26/boxscores/20250906_on2u.xml?view=plays,Reedley,San Mateo,,San Mateo,San Mateo,,1,1,single-sided
+2025-26,20250906_tjag,20250906,https://3c2asports.org/sports/fball/2025-26/boxscores/20250906_tjag.xml?view=plays,Foothill,Redwoods,Foothill,,Foothill,,1,1,single-sided
+2025-26,20250913_0tz1,20250913,https://3c2asports.org/sports/fball/2025-26/boxscores/20250913_0tz1.xml?view=plays,Foothill,Reedley,Foothill,,Foothill,,1,1,single-sided
+2025-26,20250913_yh56,20250913,https://3c2asports.org/sports/fball/2025-26/boxscores/20250913_yh56.xml?view=plays,San Mateo,Modesto,San Mateo,,San Mateo,,1,1,single-sided
+2025-26,20250920_47d4,20250920,https://3c2asports.org/sports/fball/2025-26/boxscores/20250920_47d4.xml?view=plays,Sierra,Foothill,,Foothill,Foothill,,1,1,single-sided
+2025-26,20250920_ds1e,20250920,https://3c2asports.org/sports/fball/2025-26/boxscores/20250920_ds1e.xml?view=plays,American River,San Mateo,,San Mateo,San Mateo,,1,1,single-sided
+2025-26,20250927_h3ae,20250927,https://3c2asports.org/sports/fball/2025-26/boxscores/20250927_h3ae.xml?view=plays,Foothill,Sacramento City,Foothill,,Foothill,,1,1,single-sided
+2025-26,20250927_xayo,20250927,https://3c2asports.org/sports/fball/2025-26/boxscores/20250927_xayo.xml?view=plays,Fresno City,San Mateo,,San Mateo,San Mateo,,1,1,single-sided
+2025-26,20251010_e15n,20251010,https://3c2asports.org/sports/fball/2025-26/boxscores/20251010_e15n.xml?view=plays,Laney,Foothill,,Foothill,Foothill,,1,1,single-sided
+2025-26,20251011_bne1,20251011,https://3c2asports.org/sports/fball/2025-26/boxscores/20251011_bne1.xml?view=plays,San Mateo,Diablo Valley,San Mateo,,San Mateo,,1,1,single-sided
+2025-26,20251018_4eui,20251018,https://3c2asports.org/sports/fball/2025-26/boxscores/20251018_4eui.xml?view=plays,Foothill,San Mateo,Foothill,San Mateo,San Mateo,Foothill,2,2,paired
+2025-26,20251024_zu0m,20251024,https://3c2asports.org/sports/fball/2025-26/boxscores/20251024_zu0m.xml?view=plays,Diablo Valley,Foothill,,Foothill,Foothill,,1,1,single-sided
+2025-26,20251025_vahn,20251025,https://3c2asports.org/sports/fball/2025-26/boxscores/20251025_vahn.xml?view=plays,San Mateo,San Francisco,San Mateo,,San Mateo,,1,1,single-sided
+2025-26,20251101_3wxg,20251101,https://3c2asports.org/sports/fball/2025-26/boxscores/20251101_3wxg.xml?view=plays,San Jose,San Mateo,,San Mateo,San Mateo,,1,1,single-sided
+2025-26,20251101_ck1p,20251101,https://3c2asports.org/sports/fball/2025-26/boxscores/20251101_ck1p.xml?view=plays,San Francisco,Foothill,,Foothill,Foothill,,1,1,single-sided
+2025-26,20251108_hkp6,20251108,https://3c2asports.org/sports/fball/2025-26/boxscores/20251108_hkp6.xml?view=plays,San Mateo,Laney,San Mateo,,San Mateo,,1,1,single-sided
+2025-26,20251108_o06f,20251108,https://3c2asports.org/sports/fball/2025-26/boxscores/20251108_o06f.xml?view=plays,Foothill,San Jose,Foothill,,Foothill,,1,1,single-sided
+2025-26,20251122_7wb6,20251122,https://3c2asports.org/sports/fball/2025-26/boxscores/20251122_7wb6.xml?view=plays,Sequoias,Foothill,,Foothill,Foothill,,1,1,single-sided
+2025-26,20251129_8pnn,20251129,https://3c2asports.org/sports/fball/2025-26/boxscores/20251129_8pnn.xml?view=plays,San Mateo,Fresno City,San Mateo,,San Mateo,,1,1,single-sided
+2025-26,20251206_8nk0,20251206,https://3c2asports.org/sports/fball/2025-26/boxscores/20251206_8nk0.xml?view=plays,San Mateo,Modesto,San Mateo,,San Mateo,,1,1,single-sided
+2025-26,20251213_807z,20251213,https://3c2asports.org/sports/fball/2025-26/boxscores/20251213_807z.xml?view=plays,Golden West,San Mateo,,San Mateo,San Mateo,,1,1,single-sided

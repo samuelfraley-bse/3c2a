@@ -39,12 +39,36 @@ One row per team-game pair. Each game appears twice (once for each team), so joi
 | `season` | string | Season identifier, e.g. `2025-26` |
 | `team_name` | string | The team whose schedule this row came from |
 | `team_id` | string | PrestoSports internal team ID |
-| `game_id` | string | Canonical game identifier: `{slug}_{HOME}_{AWAY}`, e.g. `20251018_1561_MONTEREY_PENINSULA_SEQUOIAS` |
+| `game_id` | string | Canonical game identifier using the stable boxscore slug only, e.g. `20251018_1561` |
 | `game_date` | string | Date in `YYYYMMDD` format |
 | `home_away` | string | `home` or `away` from this team's perspective |
 | `opponent` | string | Opponent team name |
 | `result` | string | Game result from this team's perspective, e.g. `W, 42-7` or `L, 20-17` |
 | `pbp_url` | string | Full URL to the play-by-play page for this game |
+| `schedule_home` | string | Home team name as seen on the schedule page for this row's game |
+| `schedule_away` | string | Away team name as seen on the schedule page for this row's game |
+
+---
+
+## games.csv
+
+One row per unique game slug, derived from `schedule.csv`. This is the canonical game table and should be the primary join layer for assigning teams to a game.
+
+| column | type | description |
+|---|---|---|
+| `season` | string | Season identifier, e.g. `2025-26` |
+| `game_id` | string | Canonical game identifier using the stable boxscore slug only, e.g. `20251018_1561` |
+| `game_date` | string | Date in `YYYYMMDD` format |
+| `pbp_url` | string | Full URL to the play-by-play page for this game |
+| `schedule_home` | string | Home team name as seen on one contributing schedule row |
+| `schedule_away` | string | Away team name as seen on one contributing schedule row |
+| `home_team_canonical` | string | Canonical home team inferred from paired schedule rows when available |
+| `away_team_canonical` | string | Canonical away team inferred from paired schedule rows when available |
+| `team_1` | string | First canonical participant from paired schedule rows |
+| `team_2` | string | Second canonical participant from paired schedule rows |
+| `schedule_row_count` | int | Number of `schedule.csv` rows grouped into this game |
+| `unique_team_count` | int | Number of distinct `schedule.team_name` values grouped into this game |
+| `pairing_status` | string | Pairing quality flag: `paired`, `duplicate-rows`, `single-sided`, `over-paired`, or `incomplete` |
 
 ---
 
@@ -59,6 +83,8 @@ One row per play across all scraped games. Source: each game's play-by-play page
 | `game_id` | string | Matches `game_id` in `schedule.csv` |
 | `home_team` | string | Home team name |
 | `away_team` | string | Away team name |
+| `schedule_home` | string | Home team name passed through from `schedule.csv` for the same game |
+| `schedule_away` | string | Away team name passed through from `schedule.csv` for the same game |
 | `play_id` | int | Sequential play number within the game (1-based) |
 | `drive_id` | int | Sequential drive number within the game (1-based) |
 | `drive_start_time` | string | Clock time at drive start, e.g. `14:54` |
@@ -137,5 +163,6 @@ These match the official 3C2A box score definitions:
 
 ```
 standings.team_name  <->  schedule.team_name
-schedule.game_id     <->  plays.game_id
+schedule.game_id     <->  games.game_id
+games.game_id        <->  plays.game_id
 ```

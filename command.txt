@@ -1,0 +1,1 @@
+python scrape_season.py --season 2024-25 --plays-only --delay 5.0
