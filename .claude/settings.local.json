@@ -39,7 +39,10 @@
       "Bash(mv 'c:\\\\Users\\\\sffra\\\\Downloads\\\\BSE 2025-2026\\\\foothill-cv/foothill_season_features.ipynb' 'c:\\\\Users\\\\sffra\\\\Downloads\\\\BSE 2025-2026\\\\foothill-cv/foothill/foothill_analysis.ipynb')",
       "PowerShell(Get-ChildItem \"c:\\\\Users\\\\sffra\\\\Downloads\\\\BSE 2025-2026\\\\foothill-cv\\\\\" -File | Where-Object { $_.Extension -in @\\(\".py\", \".ipynb\", \".html\", \".csv\"\\) } | Select-Object Name)",
       "Bash(awk -F',' 'NR>1{print $1}' \"c:/Users/sffra/Downloads/BSE 2025-2026/foothill-cv/outputs/2025-26/plays.csv\")",
-      "Bash(awk -F',' 'NR>1{print $4}' \"c:/Users/sffra/Downloads/BSE 2025-2026/foothill-cv/outputs/2025-26/schedule.csv\")"
+      "Bash(awk -F',' 'NR>1{print $4}' \"c:/Users/sffra/Downloads/BSE 2025-2026/foothill-cv/outputs/2025-26/schedule.csv\")",
+      "Bash(python add_field_pos_side.py)",
+      "Bash(python scrape_season.py --help)",
+      "Bash(python fill_crosswalk.py)"
     ]
   }
 }

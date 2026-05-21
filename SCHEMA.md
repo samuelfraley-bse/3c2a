@@ -159,6 +159,20 @@ These match the official 3C2A box score definitions:
 
 ---
 
+## plays_with_side.csv
+
+This is the analysis-ready version of `plays.csv` after running `add_field_pos_side.py`.
+
+It contains all columns from `plays.csv`, plus:
+
+| column | type | description |
+|---|---|---|
+| `field_pos_side` | string | `own`, `opponent`, or blank if the prefix could not be resolved |
+| `yardline_raw` | int | Raw numeric yardline from `field_position`, e.g. `MONTEREY17` -> `17` |
+| `yardline_100` | int | Offense-normalized field position measured as yards from the opponent end zone: own 25 -> `75`, opponent 25 -> `25` |
+
+---
+
 ## Join keys
 
 ```

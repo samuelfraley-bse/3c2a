@@ -13,7 +13,7 @@ from bs4 import BeautifulSoup
 # ---------------------------------------------------------------------------
 
 RE_DOWN_DIST = re.compile(
-    r'(\d+)(?:st|nd|rd|th)\s+and\s+(\d+|goal)\s+at\s+([A-Z0-9]+)',
+    r'(\d+)(?:st|nd|rd|th)\s+and\s+(\d+|goal)\s+at\s+([A-Z][A-Z0-9\s\.\-\_\~]*?\d+)',
     re.IGNORECASE
 )
 RE_DRIVE_START = re.compile(r'drive start at (\d+:\d+)', re.IGNORECASE)
@@ -63,10 +63,10 @@ RE_INT = re.compile(r'intercept', re.IGNORECASE)
 RE_TIMEOUT = re.compile(r'^Timeout\s', re.IGNORECASE)
 RE_CLOCK_ONLY = re.compile(r'^clock\s+\d+:\d+\.$', re.IGNORECASE)
 RE_FUMBLE = re.compile(
-    r'fumble by\s+(\w[\w\s\-\'\.]+?)\s+recovered by\s+(\w+)\s+(\w[\w\s\-\'\.]+?)\s+at\s+([A-Z0-9]+)',
+    r'fumble by\s+(\w[\w\s\-\'\.]+?)\s+recovered by\s+(\w+)\s+(\w[\w\s\-\'\.]+?)\s+at\s+([A-Z][A-Z0-9\s\.\-\_]*?\d+)',
     re.IGNORECASE
 )
-RE_FIELD_POS = re.compile(r'^([A-Z]+)(\d+)$')
+RE_FIELD_POS = re.compile(r'^([A-Z][A-Z0-9\s\.\-\_]*?)(\d+)$')
 RE_TACKLERS = re.compile(r'\(([^)]+)\)\s*\.?\s*$')
 
 
@@ -75,14 +75,27 @@ def normalize_team(name: str) -> str:
     return name.strip().upper().replace(' ', '_')
 
 
+def normalize_field_position(token: str | None) -> str | None:
+    """Uppercase a field-position token, collapse whitespace, and strip PrestoSports
+    truncation artifacts of the form ~N (e.g. SADDLE~139 -> SADDLE39)."""
+    if not token:
+        return None
+    t = token.strip().upper()
+    t = re.sub(r'~\d', '', t)   # strip tilde + one truncation digit
+    return re.sub(r'\s+', ' ', t)
+
+
 def field_pos_to_abs(token: str, offense: str) -> int | None:
     """Convert e.g. FOOTHILL18 or MONTEREY33 to yards from offense's own goal line."""
-    m = RE_FIELD_POS.match(token.upper())
+    norm_token = normalize_field_position(token)
+    if not norm_token:
+        return None
+    m = RE_FIELD_POS.match(norm_token)
     if not m:
         return None
     prefix, n = m.group(1), int(m.group(2))
     # If the prefix is a substring of the offense team name, it's the offense's side
-    if prefix in offense.upper():
+    if _norm(prefix) in _norm(offense):
         return n
     return 100 - n
 
@@ -310,19 +323,22 @@ def _parse_soup(soup, game_id_override: str = None, schedule_home: str = None, s
     title = title_tag['content'] if title_tag else ''
     # "Foothill vs. Monterey Peninsula - Box Score - 8/30/2025"
     title_m = re.match(r'(.+?)\s+vs\.\s+(.+?)\s+-\s+Box Score', title)
-    pbp_home = title_m.group(1).strip() if title_m else 'HOME'
-    pbp_away = title_m.group(2).strip() if title_m else 'AWAY'
+    raw_pbp_home = title_m.group(1).strip() if title_m else 'HOME'
+    raw_pbp_away = title_m.group(2).strip() if title_m else 'AWAY'
 
     url_tag = soup.find('link', rel='canonical')
     url = url_tag['href'] if url_tag else ''
     date_m = re.search(r'boxscores/(\d{8})', url)
     game_date = date_m.group(1) if date_m else '00000000'
 
-    game_id = game_id_override if game_id_override else make_game_id(game_date, pbp_home, pbp_away)
+    game_id = game_id_override if game_id_override else make_game_id(game_date, raw_pbp_home, raw_pbp_away)
 
-    # home_team/away_team used for drive matching — prefer pbp names (consistent within page)
-    home_team = pbp_home
-    away_team = pbp_away
+    # Schedule-side home/away is authoritative when available. Keep the raw pbp
+    # title names for drive-header matching because those tokens come from the page.
+    home_team = schedule_home or raw_pbp_home
+    away_team = schedule_away or raw_pbp_away
+    match_home = raw_pbp_home
+    match_away = raw_pbp_away
 
     # --- Walk the play table rows ---
     rows = soup.select('table tr')
@@ -359,10 +375,10 @@ def _parse_soup(soup, game_id_override: str = None, schedule_home: str = None, s
                 team_name = hm.group(1).strip()
                 drive_start_time = hm.group(2).strip()
                 # Determine offense/defense
-                if _team_matches(home_team, team_name):
+                if _team_matches(match_home, team_name):
                     offense = home_team
                     defense = away_team
-                elif _team_matches(away_team, team_name):
+                elif _team_matches(match_away, team_name):
                     offense = away_team
                     defense = home_team
                 else:
@@ -390,9 +406,9 @@ def _parse_soup(soup, game_id_override: str = None, schedule_home: str = None, s
         ball_on = re.match(r'^([A-Z][A-Z\s]*?)\s+ball on', play_text)
         if ball_on:
             token = ball_on.group(1).strip().upper()
-            if home_team.upper().startswith(token) or token in home_team.upper():
+            if match_home.upper().startswith(token) or token in match_home.upper():
                 offense = home_team; defense = away_team
-            elif away_team.upper().startswith(token) or token in away_team.upper():
+            elif match_away.upper().startswith(token) or token in match_away.upper():
                 offense = away_team; defense = home_team
             continue
         if not play_text or play_text == '\xa0':
@@ -415,22 +431,26 @@ def _parse_soup(soup, game_id_override: str = None, schedule_home: str = None, s
         if re.search(r',\s*NO PLAY', play_text, re.IGNORECASE):  # penalty-nullified play
             continue
 
-        # Parse situation cell  "1st and 10 at MONTEREY17"
+        row_down = None
+        row_distance = None
+        row_field_position = None
+
+        # Parse situation cell  "1st and 10 at MONTEREY17" or "1st and 10 at SAN MATE48"
         sit = RE_DOWN_DIST.search(situation_text)
         if sit:
-            down = int(sit.group(1))
+            row_down = int(sit.group(1))
             dist_raw = sit.group(2)
-            distance = None if dist_raw.lower() == 'goal' else int(dist_raw)
-            field_position = sit.group(3).upper()
+            row_distance = None if dist_raw.lower() == 'goal' else int(dist_raw)
+            row_field_position = normalize_field_position(sit.group(3))
 
         play_id += 1
         parsed = parse_play(play_text, offense, defense)
 
         # Sack + fumble: net yards = field position change from LOS to recovery spot
-        if parsed.get('is_sack') and parsed.get('is_fumble') and field_position:
+        if parsed.get('is_sack') and parsed.get('is_fumble') and row_field_position:
             rec_loc = parsed.pop('_fumble_recovery_loc', None)
             if rec_loc:
-                start = field_pos_to_abs(field_position, offense)
+                start = field_pos_to_abs(row_field_position, offense)
                 end = field_pos_to_abs(rec_loc, offense)
                 if start is not None and end is not None:
                     parsed['yards_gained'] = end - start
@@ -447,9 +467,9 @@ def _parse_soup(soup, game_id_override: str = None, schedule_home: str = None, s
             'drive_id': drive_id,
             'drive_start_time': drive_start_time,
             'quarter': quarter,
-            'down': down,
-            'distance': distance,
-            'field_position': field_position,
+            'down': row_down,
+            'distance': row_distance,
+            'field_position': row_field_position,
             'offense': offense,
             'defense': defense,
             **parsed,

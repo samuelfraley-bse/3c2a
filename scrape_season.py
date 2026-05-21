@@ -6,6 +6,7 @@ Usage:
     python scrape_season.py --standings-url https://3c2asports.org/sports/fball/2025-26/standings
     python scrape_season.py --season 2025-26 --schedule-url <url1> --schedule-url <url2>
     python scrape_season.py --season 2025-26 --plays-only [--delay 2.0] [--out outputs/]
+    python scrape_season.py --season 2025-26 --game-ids 20251018_1561 20251025_abcd
 
 Outputs (under --out/{season}/):
     standings.csv   - one row per team
@@ -344,7 +345,52 @@ def main():
     parser.add_argument('--out', default='outputs')
     parser.add_argument('--schedule-only', action='store_true')
     parser.add_argument('--plays-only', action='store_true')
+    parser.add_argument('--game-ids', nargs='+', metavar='GAME_ID',
+                        help='Rescrape specific game IDs and merge back into plays.csv')
     args = parser.parse_args()
+
+    if args.game_ids:
+        season = args.season or DEFAULT_SEASON
+        out_dir = os.path.join(args.out, season)
+        plays_path = os.path.join(out_dir, 'plays.csv')
+        games_path = os.path.join(out_dir, 'games.csv')
+
+        games = {}
+        with open(games_path, encoding='utf-8') as f:
+            for r in csv.DictReader(f):
+                games[r['game_id']] = r
+
+        existing = []
+        fieldnames = None
+        with open(plays_path, newline='', encoding='utf-8') as f:
+            reader = csv.DictReader(f)
+            fieldnames = reader.fieldnames
+            for r in reader:
+                if r['game_id'] not in args.game_ids:
+                    existing.append(r)
+        print(f'Kept {len(existing)} existing plays (dropping rows for {args.game_ids})')
+
+        session = requests.Session()
+        session.headers['User-Agent'] = 'foothill-cv-research/1.0'
+
+        new_plays = []
+        for gid in args.game_ids:
+            g = games.get(gid)
+            if not g:
+                print(f'  {gid}: not found in games.csv — skipping')
+                continue
+            print(f'  {gid}: fetching {g["pbp_url"]}')
+            plays = scrape_plays(g, args.delay, session)
+            print(f'    parsed {len(plays)} plays')
+            new_plays.extend(plays)
+
+        all_plays = existing + new_plays
+        with open(plays_path, 'w', newline='', encoding='utf-8') as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction='ignore')
+            writer.writeheader()
+            writer.writerows(all_plays)
+        print(f'Wrote {len(all_plays)} plays to {plays_path}')
+        return
 
     season, standings_url = resolve_entrypoint(args.season, args.standings_url)
 
