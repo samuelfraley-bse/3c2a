@@ -92,6 +92,9 @@ One row per play across all scraped games. Source: each game's play-by-play page
 | `down` | int | Down (1–4), null for non-scrimmage plays |
 | `distance` | int | Yards to go, null for goal-line or non-scrimmage plays |
 | `field_position` | string | Field position token, e.g. `MONTEREY17` |
+| `field_pos_side` | string | `own` or `opponent` relative to the offense; blank if prefix unresolved |
+| `yardline_raw` | int | Numeric yardline extracted from `field_position`, e.g. `MONTEREY17` → `17` |
+| `yardline_100` | int | Yards to the opponent end zone: own 25 → `75`, opponent 25 → `25` |
 | `offense` | string | Team name with the ball |
 | `defense` | string | Team name on defense |
 
@@ -147,29 +150,19 @@ One row per play across all scraped games. Source: each game's play-by-play page
 
 ## Stat conventions
 
-These match the official 3C2A box score definitions:
+Sacks are stored as `play_type='pass', is_sack=True`. Conceptually a sack is a dropback — the QB dropped back to pass and was tackled. The NCAA box score convention, however, counts sacks as rush attempts and charges their negative yardage to the rushing total. Both conventions are validated against official 3C2A totals.
 
-- **Net rushing yards** = sum of `yards_gained` where `play_type='rush'` (includes sack yards, which are negative)
-- **Rushing attempts** = count of `play_type='rush'` rows (includes sacks)
-- **Net passing yards** = sum of `yards_gained` where `play_type='pass'` and `pass_result in ('complete', 'td')`
-- **Pass attempts** = count of `play_type='pass'` and `is_sack=False`
-- **Completions** = count of `play_type='pass'` and `pass_result in ('complete', 'td')`
-- **Dropbacks** = pass attempts + sack count
-- **Sacks** = count/sum where `is_sack=True` (yards are negative)
+QB scrambles (QB tucks and runs) appear as `play_type='rush'` in the PBP text and are indistinguishable from designed runs.
 
----
-
-## plays_with_side.csv
-
-This is the analysis-ready version of `plays.csv` after running `add_field_pos_side.py`.
-
-It contains all columns from `plays.csv`, plus:
-
-| column | type | description |
-|---|---|---|
-| `field_pos_side` | string | `own`, `opponent`, or blank if the prefix could not be resolved |
-| `yardline_raw` | int | Raw numeric yardline from `field_position`, e.g. `MONTEREY17` -> `17` |
-| `yardline_100` | int | Offense-normalized field position measured as yards from the opponent end zone: own 25 -> `75`, opponent 25 -> `25` |
+| Metric | Formula |
+|---|---|
+| **Dropbacks** | `play_type='pass'` (pass attempts + sacks) |
+| **Pass attempts** | `play_type='pass'` and `is_sack=False` |
+| **Completions** | `play_type='pass'` and `pass_result in ('complete', 'td')` |
+| **Net passing yards** | sum of `yards_gained` where `play_type='pass'` and `pass_result in ('complete', 'td')` |
+| **Rush attempts (NCAA box)** | count where `play_type='rush'` or `is_sack=True` |
+| **Net rushing yards (NCAA box)** | sum of `yards_gained` where `play_type='rush'` or `is_sack=True` (sack yards are negative) |
+| **Sack count / yards** | `is_sack=True`; yards are negative, stored on the `play_type='pass'` row |
 
 ---
 

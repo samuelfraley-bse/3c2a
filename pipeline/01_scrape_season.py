@@ -57,14 +57,15 @@ GAMES_FIELDS = [
 # HTTP helper
 # ---------------------------------------------------------------------------
 
-def fetch(url: str, delay: float, session: requests.Session, retries: int = 4) -> str | None:
+def fetch(url: str, delay: float, session: requests.Session, retries: int = 6) -> str | None:
     time.sleep(delay)
     for attempt in range(retries):
         try:
-            r = session.get(url, timeout=20)
-            if r.status_code == 429:
-                wait = 60 * (2 ** attempt)  # 60s, 120s, 240s, 480s
-                print(f'  [429] rate limited - waiting {wait}s then retrying ({attempt+1}/{retries})')
+            r = session.get(url, timeout=30)
+            if r.status_code in (429, 202) or not r.text.strip():
+                wait = 60 * (2 ** attempt)
+                reason = '429 rate limited' if r.status_code == 429 else f'{r.status_code} empty response'
+                print(f'  [{reason}] waiting {wait}s then retrying ({attempt+1}/{retries})')
                 time.sleep(wait)
                 continue
             r.raise_for_status()
@@ -74,8 +75,9 @@ def fetch(url: str, delay: float, session: requests.Session, retries: int = 4) -
             print(f'  [ERR] {url} - {e}')
             return None
         except Exception as e:
-            print(f'  [ERR] {url} - {e}')
-            return None
+            wait = 15 * (2 ** attempt)  # 15s, 30s, 60s, ... for connection errors
+            print(f'  [ERR] {url} - {e} (attempt {attempt+1}/{retries}, retrying in {wait}s)')
+            time.sleep(wait)
     print(f'  [FAIL] {url} - gave up after {retries} retries')
     return None
 
@@ -217,7 +219,46 @@ def scrape_schedule(team: dict, season: str, delay: float, session: requests.Ses
 # Phase 3: Play-by-play
 # ---------------------------------------------------------------------------
 
-def scrape_plays(game: dict, delay: float, session: requests.Session) -> list[dict]:
+def load_crosswalk(path: str) -> dict[str, dict[str, str]]:
+    """Return {game_id: {prefix: canonical_team}} from the crosswalk CSV."""
+    if not path or not os.path.exists(path):
+        return {}
+    result = {}
+    with open(path, newline='', encoding='utf-8') as f:
+        for row in csv.DictReader(f):
+            gid = row.get('game_id', '').strip()
+            if not gid:
+                continue
+            pa = row.get('prefix_a', '').strip()
+            pb = row.get('prefix_b', '').strip()
+            ca = row.get('canonical_a', '').strip()
+            cb = row.get('canonical_b', '').strip()
+            if not ca or not cb:
+                continue
+            entry = {}
+            if pa:
+                entry[pa] = ca
+            if pb:
+                entry[pb] = cb
+            result[gid] = entry
+    print(f'Loaded crosswalk for {len(result)} games.')
+    return result
+
+
+def load_manual_files(manual_dir: str) -> dict[str, str]:
+    """Return {game_id: html_text} for every <game_id>.html in manual_dir."""
+    if not manual_dir or not os.path.isdir(manual_dir):
+        return {}
+    result = {}
+    for fname in os.listdir(manual_dir):
+        if fname.endswith('.html'):
+            gid = fname[:-5]
+            with open(os.path.join(manual_dir, fname), encoding='utf-8', errors='replace') as f:
+                result[gid] = f.read()
+    return result
+
+
+def scrape_plays(game: dict, delay: float, session: requests.Session, crosswalk_map: dict = None) -> list[dict]:
     html = fetch(game['pbp_url'], delay, session)
     if not html:
         return []
@@ -226,6 +267,7 @@ def scrape_plays(game: dict, delay: float, session: requests.Session) -> list[di
         game_id_override=game['game_id'],
         schedule_home=game.get('home_team_canonical') or game.get('schedule_home'),
         schedule_away=game.get('away_team_canonical') or game.get('schedule_away'),
+        crosswalk_map=crosswalk_map,
     )
 
 
@@ -347,6 +389,10 @@ def main():
     parser.add_argument('--plays-only', action='store_true')
     parser.add_argument('--game-ids', nargs='+', metavar='GAME_ID',
                         help='Rescrape specific game IDs and merge back into plays.csv')
+    parser.add_argument('--manual-dir', default=None, metavar='DIR',
+                        help='Directory of saved HTML files named <game_id>.html — parsed without fetching')
+    parser.add_argument('--crosswalk', default=None, metavar='FILE',
+                        help='Crosswalk CSV (game_id, prefix_a, prefix_b, canonical_a, canonical_b); defaults to outputs/{season}/prefix_crosswalk.csv')
     args = parser.parse_args()
 
     if args.game_ids:
@@ -361,35 +407,65 @@ def main():
                 games[r['game_id']] = r
 
         existing = []
-        fieldnames = None
         with open(plays_path, newline='', encoding='utf-8') as f:
             reader = csv.DictReader(f)
-            fieldnames = reader.fieldnames
             for r in reader:
                 if r['game_id'] not in args.game_ids:
                     existing.append(r)
         print(f'Kept {len(existing)} existing plays (dropping rows for {args.game_ids})')
 
+        # Clear these game IDs from failed_games.txt so they're re-attempted cleanly.
+        failed_path = os.path.join(out_dir, 'failed_games.txt')
+        if os.path.exists(failed_path):
+            with open(failed_path) as f:
+                still_failed = [ln.strip() for ln in f if ln.strip() and ln.strip() not in args.game_ids]
+            with open(failed_path, 'w') as f:
+                f.write('\n'.join(still_failed) + ('\n' if still_failed else ''))
+
         session = requests.Session()
         session.headers['User-Agent'] = 'foothill-cv-research/1.0'
+        manual_files = load_manual_files(args.manual_dir)
+        crosswalk_path = args.crosswalk or os.path.join(out_dir, 'prefix_crosswalk.csv')
+        crosswalk = load_crosswalk(crosswalk_path)
 
         new_plays = []
+        retry_failed = []
         for gid in args.game_ids:
             g = games.get(gid)
             if not g:
                 print(f'  {gid}: not found in games.csv — skipping')
                 continue
-            print(f'  {gid}: fetching {g["pbp_url"]}')
-            plays = scrape_plays(g, args.delay, session)
+            cw_map = crosswalk.get(gid)
+            if gid in manual_files:
+                print(f'  {gid}: parsing from manual file')
+                plays = parse_html(
+                    manual_files[gid],
+                    game_id_override=g['game_id'],
+                    schedule_home=g.get('home_team_canonical') or g.get('schedule_home'),
+                    schedule_away=g.get('away_team_canonical') or g.get('schedule_away'),
+                    crosswalk_map=cw_map,
+                )
+            else:
+                print(f'  {gid}: fetching {g["pbp_url"]}')
+                plays = scrape_plays(g, args.delay, session, crosswalk_map=cw_map)
             print(f'    parsed {len(plays)} plays')
-            new_plays.extend(plays)
+            if plays:
+                new_plays.extend(plays)
+            else:
+                print(f'  [WARN] {gid} - still 0 plays, will remain out of plays.csv')
+                retry_failed.append(gid)
 
         all_plays = existing + new_plays
         with open(plays_path, 'w', newline='', encoding='utf-8') as f:
-            writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction='ignore')
+            writer = csv.DictWriter(f, fieldnames=FIELDS, extrasaction='ignore')
             writer.writeheader()
             writer.writerows(all_plays)
         print(f'Wrote {len(all_plays)} plays to {plays_path}')
+        if retry_failed:
+            with open(failed_path, 'a') as f:
+                for gid in retry_failed:
+                    f.write(gid + '\n')
+            print(f'  Still failing: {retry_failed}')
         return
 
     season, standings_url = resolve_entrypoint(args.season, args.standings_url)
@@ -466,6 +542,8 @@ def main():
 
     print('\n=== Phase 3: Play-by-Play ===')
 
+    failed_path = os.path.join(out_dir, 'failed_games.txt')
+
     existing_game_ids = set()
     if os.path.exists(plays_path):
         with open(plays_path, encoding='utf-8') as f:
@@ -475,24 +553,63 @@ def main():
                     existing_game_ids.add(gid)
         print(f'  Resuming - {len(existing_game_ids)} games already in plays.csv')
 
-    with open(plays_path, 'a', newline='', encoding='utf-8') as plays_file:
+    # Games that previously returned 0 plays (fetch blocked or parse error) are
+    # tracked in failed_games.txt so we skip them on resume but can retry with --game-ids.
+    failed_game_ids = set()
+    if os.path.exists(failed_path):
+        with open(failed_path) as f:
+            failed_game_ids = {line.strip() for line in f if line.strip()}
+        print(f'  Skipping {len(failed_game_ids)} previously failed games (see {failed_path})')
+
+    manual_files = load_manual_files(args.manual_dir)
+    if manual_files:
+        print(f'  Manual files found for: {sorted(manual_files.keys())}')
+    crosswalk_path = args.crosswalk or os.path.join(out_dir, 'prefix_crosswalk.csv')
+    crosswalk = load_crosswalk(crosswalk_path)
+
+    with open(plays_path, 'a', newline='', encoding='utf-8') as plays_file, \
+         open(failed_path, 'a') as failed_file:
         writer = csv.DictWriter(plays_file, fieldnames=FIELDS, extrasaction='ignore')
         if not existing_game_ids:
             writer.writeheader()
 
         total_plays = 0
+        newly_failed = 0
         for game in games_rows:
             game_id = game['game_id']
             if game_id in existing_game_ids:
                 print(f'  [SKIP] {game_id}')
                 continue
-            print(f'  PBP: {game_id}')
-            plays = scrape_plays(game, args.delay, session)
-            writer.writerows(plays)
-            plays_file.flush()
-            total_plays += len(plays)
+            if game_id in failed_game_ids:
+                print(f'  [SKIP-FAILED] {game_id}')
+                continue
+            cw_map = crosswalk.get(game_id)
+            if game_id in manual_files:
+                print(f'  PBP (manual): {game_id}')
+                plays = parse_html(
+                    manual_files[game_id],
+                    game_id_override=game['game_id'],
+                    schedule_home=game.get('home_team_canonical') or game.get('schedule_home'),
+                    schedule_away=game.get('away_team_canonical') or game.get('schedule_away'),
+                    crosswalk_map=cw_map,
+                )
+            else:
+                print(f'  PBP: {game_id}')
+                plays = scrape_plays(game, args.delay, session, crosswalk_map=cw_map)
+            if plays:
+                writer.writerows(plays)
+                plays_file.flush()
+                total_plays += len(plays)
+            else:
+                print(f'  [WARN] {game_id} - 0 plays parsed, marking as failed')
+                failed_file.write(game_id + '\n')
+                failed_file.flush()
+                newly_failed += 1
 
     print(f'Wrote {total_plays} new play rows -> {plays_path}')
+    if newly_failed:
+        print(f'  {newly_failed} games returned 0 plays -> {failed_path}')
+        print(f'  To retry: py -3 scrape_season.py --season {season} --game-ids <id1> <id2> ...')
     print('\nDone.')
 
 
