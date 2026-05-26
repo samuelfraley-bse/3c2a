@@ -1,0 +1,210 @@
+@charset 'UTF-8';
+/* Slider */
+.slick-loading .slick-list
+{
+    background: #fff url('/info/images/ajax_loader.gif') center center no-repeat;
+}
+
+/* Added new helper class to hide slick arrows unless the 
+parent element is active or in focus. */
+.slick-lazy-arrows .slick-arrow{
+    opacity:0;
+    transition:0.5s ease all;
+}
+.slick-lazy-arrows:hover .slick-arrow:not(.slick-disabled),
+.slick-lazy-arrows:focus-within .slick-arrow:not(.slick-disabled){
+    opacity:1;
+}
+/* end of unique helper class for button arrows to be hidden on page load */
+
+.slick-prev,
+.slick-next
+{
+    position: absolute;
+    top: 50%;
+    display: block;
+    width: 2rem;
+    height: 3rem;
+    padding: 0;
+    -webkit-transform: translate(0, -50%);
+    -ms-transform: translate(0, -50%);
+    transform: translate(0, -50%);
+    cursor: pointer;
+    z-index:2;
+}
+.slick-prev:hover:before,
+.slick-prev:focus:before,
+.slick-next:hover:before,
+.slick-next:focus:before,
+.slick-pp:hover:before,
+.slick-pp:focus:before
+{
+    opacity: 1;
+}
+.slick-prev.slick-disabled:before,
+.slick-next.slick-disabled:before
+{
+    opacity: var(--bs-btn-disabled-opacity);
+}
+
+.slick-prev:before,
+.slick-next:before,
+.slick-pp:before
+{
+    font-size: 2rem;
+    line-height: 1;
+    opacity: .75;
+    color: white;
+
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+}
+
+.slick-prev
+{
+    left: -2rem;
+}
+
+.slick-arrow-controls .pp,
+.slick-pp,
+.slick-arrow.pp {
+    position: absolute;
+    width: 2rem;
+    height:2rem !important;
+    right: -2rem;
+    bottom:0 !important;
+    top:auto !important;
+    left:auto !important;
+    z-index: 2 !important;
+    display:flex;
+    justify-content:center;
+    align-items:center;
+    cursor: pointer;
+    text-decoration: none;
+}
+
+[dir='rtl'] .slick-prev
+{
+    right: -2rem;
+    left: auto;
+}
+
+[dir='rtl'] .slick-prev .fa
+{
+    -o-transform: rotate(-90deg);
+    -webkit-transform: rotate(-90deg);
+    transform: rotate(-90deg);
+}
+
+.slick-next
+{
+    right: -2rem;
+}
+[dir='rtl'] .slick-next .fa
+{
+    -o-transform: rotate(-90deg);
+    -webkit-transform: rotate(-90deg);
+    transform: rotate(-90deg);
+    left: -2rem;
+}
+
+/* Dots */
+.slick-dotted.slick-slider
+{
+    margin-bottom: 3rem;
+    margin-top:0;
+}
+
+.slick-dots
+{
+    position: absolute;
+    bottom: -3rem;
+    display:flex;
+    justify-content:center;
+    align-items:center;
+    width: 100%;
+    padding: 0;
+    margin: 0;
+    list-style: none;
+    text-align: center;
+}
+.slick-dots li
+{
+    position: relative;
+
+    display: inline-block;
+
+    width: 2rem;
+    height: 2rem;
+    margin: 0 0.25rem;
+    padding: 0;
+
+    cursor: pointer;
+}
+.slick-dots li button
+{
+    font-size: 0;
+    display: block;
+    width: auto;
+    height: auto;
+    padding: 0;
+    cursor: pointer;
+    color: inherit;
+    border: 0;
+    outline: none;
+    background: transparent;
+    content: "";
+}
+.slick-dots li button:hover,
+.slick-dots li button:focus
+{
+    outline: none;
+}
+.slick-dots li button:hover:before,
+.slick-dots li button:focus:before
+{
+    opacity: 1;
+}
+.slick-dots li button:before
+{
+    font-size: 1.5rem;
+    line-height: 1.5rem;
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 2rem;
+    height: 4px;
+    content: '\26AC';
+    text-align: center;
+    opacity: .25;
+    color: var(--bs-primary, #000);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    box-sizing: content-box;
+    content:"";
+    flex: 0 1 auto;
+    padding: 0;
+    text-indent: -999px;
+    cursor: pointer;
+    background-color: #000;
+    background-clip: padding-box;
+    border: 0;
+    border-top: 14px solid transparent;
+    border-bottom: 14px solid transparent;
+    transition: opacity .6s ease;
+}
+.slick-dots li.slick-active button:before
+{
+    opacity: 1;
+    background-color: var(--bs-link-color, #000);
+}
+
+.slick-autoplay-toggle-button .slick-pause-icon:before {
+    content: "\f04b";
+    font-family: var(--fa-family-classic);
+
+}
+.slick-autoplay-toggle-button .slick-pause-icon:before {
+    content: "\f04c";
+    font-family: var(--fa-family-classic);
+}

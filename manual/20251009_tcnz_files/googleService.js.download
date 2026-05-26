@@ -1,0 +1,77 @@
+var ps = ps || {};
+ps.info = ps.info || {};
+ps.info.ads = ps.info.ads || {};
+ps.info.ads.GoogleAds = (function ($, googletag) {
+    var responsiveLeaderboardToMediumMappings = function () {
+        return googletag
+            .sizeMapping()
+            .addSize([1024, 768], [[970, 90], [728, 90]]) // Desktop
+            .addSize([980, 590], [728, 90]) //Tablet
+            .addSize([640, 480], [300, 250]) //phone
+            .addSize([0, 0], [300, 250]) // Fits browsers of any size smaller than 640 x 480
+            .build();
+    };
+    var responsiveLeaderboardMappings = function () {
+        return googletag
+            .sizeMapping()
+            .addSize([1024, 768], [[970, 90], [728, 90]]) // Desktop
+            .addSize([980, 590], [728, 90]) //Tablet
+            .addSize([640, 480], [320, 50]) //phone
+            .addSize([0, 0], [320, 50]) // Fits browsers of any size smaller than 640 x 480
+            .build();
+    };
+
+    var render = function (adServer) {
+        var adContainers = $("div[key='googleAdContainer']");
+        if (adContainers) {
+            googletag.cmd.push(function () {
+                var expecting=0;
+                $.each(adContainers, function (_, item) {
+                    expecting++;
+                    var id = $(item).attr("id");
+                    var adSpot = $(item).attr("adSpot");
+                    var sizes = JSON.parse($(item).attr("sizes"));
+                    var slot = googletag.defineSlot(adServer + adSpot, sizes, id);
+                    var addMappings = (sizes && sizes.length && sizes.length > 1);
+                    if (slot && addMappings) {
+                        if (sizes.toString().includes("728,90,300,250")) {
+                            slot.defineSizeMapping(responsiveLeaderboardToMediumMappings()).addService(googletag.pubads());
+                        } else if (sizes.toString().includes("728,90,320,50")) {
+                            slot.defineSizeMapping(responsiveLeaderboardMappings()).addService(googletag.pubads());
+                        } else {
+                            console.log("failed to identify an ad mapping for " + adSpot + " based on sizes " + sizes);
+                        }
+                    } else if (slot) {
+                        console.log("An error was found with size definitions for " + adSpot);
+                    }
+                });
+                var rendered = 0;
+                googletag.pubads().setTargeting('domain', window.location.host);
+                googletag.pubads().enableSingleRequest();
+                // googletag.pubads().collapseEmptyDivs(); // MUST REMOVE THIS IN ORDER TO HAVE EMPTY SLOTS THAT MAY GET BACKFILLED BY ADSENSE
+                googletag.enableServices();
+                googletag.pubads().addEventListener('slotRenderEnded', function(event) {
+                    rendered++;
+                    if(rendered >= expecting){
+                        // console.log("We got them all? " + rendered);
+                        $.each(adContainers, function (_, item) {
+                            if ($(item).is(':empty')){
+                                $(item).remove();
+                            }
+                        });
+                    }
+                });
+                $.each(adContainers, function (_, item) {
+                    googletag.display($(item).attr("id"));
+                });
+            });
+        }
+    };
+    var cleanEmptySpots = function () {
+        
+    };
+    return {
+        render: render,
+        cleanEmptySpots : function(){}
+    }
+})(jQuery, window.googletag || {cmd: []});

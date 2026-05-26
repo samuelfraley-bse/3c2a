@@ -1,0 +1,10 @@
+jQuery(document).ready(function($) {
+    
+    var splitNavClonedContent = $('.site-header .macro-primary-navigation').find('.headers-links').clone().html();
+    $('.site-header .macro-primary-navigation .component-navbar-split.layout-standard .navbar-collapse > ul:last-of-type').append('<div class="d-flex align-items-center headers-links justify-content-end ms-auto">' + splitNavClonedContent + '</div>');
+
+    // For including Link in mobile menu
+    var offCanvasClonedContent = $('.site-header .macro-primary-navigation').find('.stats-link').clone().html();
+    $('.site-header .mobile-menu .navbar-offcanvas-template .offcanvas-body > div > ul').append('<div class="stats-link text-uppercase">' + offCanvasClonedContent + '</div>');
+
+});

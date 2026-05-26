@@ -1,0 +1,136 @@
+@font-face {
+    font-family: 'NunitoSans';
+    src: url('/NunitoSans-SemiBold.ttf') format('truetype');
+    font-weight: 600;
+    font-style: normal;
+
+}
+
+
+@font-face {
+    font-family: 'NunitoSans';
+    src: url('/NunitoSans-ExtraBold.ttf') format('truetype');
+    font-weight: 800;
+    font-style: normal;
+
+}
+
+:root {
+   --body-font-family: 'NunitoSans', sans-serif;
+   --bs-font-sans-serif: 'NunitoSans', sans-serif;
+   --bs-body-font-family: 'NunitoSans', sans-serif;
+   --heading-font-family: 'NunitoSans', sans-serif;
+}
+
+@media (min-width: 992px) {
+    .sec-schedule-tabs .archive-link {
+        right: 8rem;
+        top: -50px;
+    }
+}
+@media (min-width: 576px) {
+    /* .sec-schedule-tabs .component-scoreboard.layout-clean .slick-track .slick-slide.card.no-more-events{ min-height:100px; width:100% !important;} */
+    /*.component-scoreboard .slick-track:has(.no-more-events) { width:100% !important }*/
+}
+.sec-schedule-tabs .component-scoreboard.layout-clean .card-inner .sport-name {
+    --bs-link-color: var(--bs-tertiary);
+    --bs-link-hover-color: #fff;
+}
+
+#waldo-sticky-footer-wrapper {
+    z-index:999 !important;
+}
+
+.section-conference-info .row h3 { font-weight:700 }
+.section-conference-info .row .label { font-weight:700; margin-right:0.5rem }
+.section-conference-info .row { margin-bottom:1rem }
+
+.conference-home .section-header { text-transform:uppercase; font-weight:700 }
+.conference-home .member-logos ul { text-align:left }
+.conference-home .member-logos .list-group-item-heading { font-size:1.25rem; text-transform:uppercase }
+.conference-home .member-logos ul > li ul { padding:1.5rem 0 }
+.conference-home .member-logos ul > li li { display:inline-flex; justify-content:flex-start!important; padding:0 1rem }
+.conference-home .member-logos li img { max-height:60px }
+
+.conference-home .member-logos ul > li { display:inline-flex; justify-content:flex-start!important; padding:0 1rem }
+
+.internal-page #season-standings table { width:100% }
+.component-headlines.layout-basic .slick-arrow-controls .slick-arrow.pp { margin-top:0!important }
+
+
+.component-scoreboard.layout-clean .card-inner > div.event-date-and-status .status { max-width:100px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+
+.btn-secondary:hover,
+.btn-secondary.focus,
+.btn-secondary:focus,
+.btn-secondary:not(:disabled):not(.disabled).active,
+.btn-secondary:not(:disabled):not(.disabled):active,
+a.btn-secondary:hover,
+a.btn-secondary.focus,
+a.btn-secondary:focus,
+a.btn-secondary:not(:disabled):not(.disabled).active,
+a.btn-secondary:not(:disabled):not(.disabled):active,
+.schedule-grid .status.bg-secondary,
+.badge-secondary,
+.btn-secondary,
+a.btn-secondary,
+.btn-outline-secondary:hover,
+.btn-outline-secondary.focus,
+.btn-outline-secondary:focus,
+.btn-outline-secondary:not(:disabled):not(.disabled).active,
+.btn-outline-secondary:not(:disabled):not(.disabled):active,
+.show>.btn-outline-secondary.dropdown-toggle,
+a.btn-outline-secondary:hover,
+a.btn-outline-secondary.focus,
+a.btn-outline-secondary:focus,
+a.btn-outline-secondary:not(:disabled):not(.disabled).active,
+a.btn-outline-secondary:not(:disabled):not(.disabled):active,
+.show>a.btn-outline-secondary.dropdown-toggle,
+.schedule-grid .status.bg-secondary,
+.badge-secondary,
+.btn-outline-secondary,
+a.btn-outline-secondary{
+    color:var(--bs-primary); border-color:var(--bs-primary) ;
+}
+
+/*
+.sec-schedule-tabs .component-scoreboard.layout-clean .default-logo-holder{ background:url(/assets/Primary_Logo_-_.3x-8-.png) no-repeat 50% 50%; background-size:contain; opacity:1!important; height:60px; width:60px }
+.sec-schedule-tabs .component-scoreboard.layout-clean .fa-notdef:before { display:none }
+*/
+.sec-featured-headlines .component-headlines.layout-basic .card .card-title a:hover { color:var(--bs-primary)!important; text-decoration:underline}
+
+.navbar-secondary .navbar-secondary-thumbnail { display:none!important }
+
+.site-footer .footer-details .title { font-weight:700!important; font-size:1.125rem!important }
+.site-header .macro-secondary-navigation .nav-link.active { color:var(--bs-white)}
+
+.sec-schedule-tabs .component-scoreboard.layout-clean .card-inner > div.event-date-and-status { background:var(--bs-primary)}
+.inc-hostedby .sr-only { color:#fff }
+.component-banner .pp .sr-only,
+.component-headlines .slick-pp .sr-only { color:#000!important }
+.site-footer .visually-hidden { color:#000!important }
+
+@media (min-width: 992px) {
+
+    .component-navbar-split.layout-standard .navbar-nav.top-level { justify-content:space-around!important}
+    .site-header .component-navbar-split.layout-standard .navbar .navbar-brand-centered img { max-height:5rem }
+    .site-header .component-navbar-split.layout-standard .navbar .megamenu .dropdown-menu-inner ul[data-flex=true] > li.nav-item:last-child > a:after { display:none }
+
+    .component-navbar-split.layout-standard .navbar.navbar-expand-lg .dropdown-menu .nav-link {  padding-top:0.15rem!important; padding-bottom:0.15rem!important}
+    .component-navbar-split.layout-standard .navbar.navbar-expand-lg .dropdown-menu.megamenu { max-height:90vh!important }
+    .component-navbar-split.layout-standard .navbar .megamenu .megamenu-inner ul[data-column="true"] > li > .dropdown-old-toggle { max-width:300px }
+
+.component-navbar-split.layout-standard .navbar .megamenu .megamenu-inner ul[data-column="true"] > li > .dropdown-menu { justify-content:flex-start!important }
+
+}
+
+
+@media (min-width: 1200px) {
+
+.sec-banner .component-banner.layout-slider .slick-arrow-controls .slick-arrow.prev { left:45%!important}
+.sec-banner .component-banner.layout-slider .slick-arrow-controls .slick-arrow.next { left:55%!important}
+
+.sec-sponsors .component-banner.layout-slider .slick-arrow-controls .slick-arrow.prev { left:45%!important }
+.sec-sponsors .component-banner.layout-slider .slick-arrow-controls .slick-arrow.next { left:55%!important}
+
+}

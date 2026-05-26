@@ -18,28 +18,34 @@ os.makedirs(OUT_DIR, exist_ok=True)
 def compute_production(df: pd.DataFrame, group_col: str) -> pd.DataFrame:
     rows = []
     for team, g in df.groupby(group_col):
-        passes = g[g["play_type"] == "pass"]
-        rushes = g[g["play_type"] == "rush"]
-        total = len(g)
+        dropbacks  = g[g["play_type"] == "pass"]
+        pass_att   = dropbacks[~dropbacks["is_sack"]]
+        sacks      = dropbacks[dropbacks["is_sack"]]
+        rushes     = g[g["play_type"] == "rush"]
+        # NCAA convention: sacks count as rush attempts with negative yards
+        rush_all   = pd.concat([rushes, sacks])
+        total      = len(g)
 
-        pass_yards = passes["yards_gained"].sum()
-        rush_yards = rushes["yards_gained"].sum()
+        pass_yards = pass_att[pass_att["completion"]]["yards_gained"].sum()
+        rush_yards = rush_all["yards_gained"].sum()
+        n_pass_att = len(pass_att)
+        n_rush_att = len(rush_all)
 
         rows.append({
             "team": team,
             # passing
-            "pass_pct":        round(len(passes) / total * 100, 1) if total else 0,
+            "pass_pct":        round(len(dropbacks) / total * 100, 1) if total else 0,
             "pass_yards":      int(pass_yards),
-            "pass_ypa":        round(pass_yards / len(passes), 2) if len(passes) else 0,
-            "pass_td":         int(passes["is_td"].sum()),
-            "comp_pct":        round(passes["completion"].sum() / len(passes) * 100, 1) if len(passes) else 0,
-            "pass_10plus":     int((passes["yards_gained"] >= 10).sum()),
-            "pass_20plus":     int((passes["yards_gained"] >= 20).sum()),
-            "pass_success_rt": round(passes["success"].sum() / len(passes) * 100, 1) if len(passes) else 0,
-            # rushing
-            "rush_pct":        round(len(rushes) / total * 100, 1) if total else 0,
+            "pass_ypa":        round(pass_yards / n_pass_att, 2) if n_pass_att else 0,
+            "pass_td":         int(pass_att["is_td"].sum()),
+            "comp_pct":        round(pass_att["completion"].sum() / n_pass_att * 100, 1) if n_pass_att else 0,
+            "pass_10plus":     int((pass_att[pass_att["completion"]]["yards_gained"] >= 10).sum()),
+            "pass_20plus":     int((pass_att[pass_att["completion"]]["yards_gained"] >= 20).sum()),
+            "pass_success_rt": round(pass_att["success"].sum() / n_pass_att * 100, 1) if n_pass_att else 0,
+            # rushing (includes sacks per NCAA convention)
+            "rush_pct":        round(n_rush_att / total * 100, 1) if total else 0,
             "rush_yards":      int(rush_yards),
-            "rush_ypa":        round(rush_yards / len(rushes), 2) if len(rushes) else 0,
+            "rush_ypa":        round(rush_yards / n_rush_att, 2) if n_rush_att else 0,
             "rush_td":         int(rushes["is_td"].sum()),
             "rush_10plus":     int((rushes["yards_gained"] >= 10).sum()),
             "rush_20plus":     int((rushes["yards_gained"] >= 20).sum()),

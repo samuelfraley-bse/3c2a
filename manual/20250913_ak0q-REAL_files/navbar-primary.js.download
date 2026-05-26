@@ -1,0 +1,104 @@
+function removeLevelFourChildren() {
+    var desktopView = $(window).width();
+
+    if (desktopView < 992) {
+        $(".component-navbar-primary, .component-navbar-split")
+            .find(".megamenu .dropdown-menu.level-3 .dropdown-menu-list .nav-item.dropdown")
+            .each(function () {
+                $(this).find(".flex-dropdown")
+                    .attr("data-bs-target", "")
+                    .attr("data-bs-toggle", "")
+                    .attr("aria-expanded", "false");
+
+                $(this).find(".flex-dropdown .nav-link").addClass("w-100");
+                $(this).find(".flex-dropdown .dropdown-toggle").remove();
+                $(this).find(".dropdown-menu.level-4").remove();
+            });
+    }
+}
+
+function updateNavOpen() {
+    var hasOpenCollapse = $(
+        ".component-navbar-primary .dropdown-menu.collapse.show, " +
+        ".component-navbar-split .dropdown-menu.collapse.show"
+    ).length > 0;
+
+    var hasHoverClass = $(
+        ".component-navbar-primary .nav-item.dropdown.is-hovering, " +
+        ".component-navbar-split .nav-item.dropdown.is-hovering"
+    ).length > 0;
+
+    document.documentElement.classList.toggle("nav-open", hasOpenCollapse || hasHoverClass);
+}
+
+$(function () {
+    // Main mobile navbar only
+    $(".component-navbar-primary .navbar-collapse, .component-navbar-split .navbar-collapse")
+        .on("show.bs.collapse", function (e) {
+            if ($(this).is(e.target)) {
+                $(document.body).addClass("mobile-nav-active");
+                $(document.body).css({ overflow: "hidden" });
+                $(document).trigger("nm_pr_menu_open", { element: this.id });
+            }
+        })
+        .on("hide.bs.collapse", function (e) {
+            if ($(this).is(e.target)) {
+                $(document.body).removeClass("mobile-nav-active");
+                $(document.body).css({ overflow: "auto" });
+                $(document).trigger("nm_pr_menu_close", { element: this.id });
+            }
+        });
+
+    // Dropdown panels that open via Bootstrap collapse
+    $(document).on(
+        "shown.bs.collapse hidden.bs.collapse",
+        ".component-navbar-primary .dropdown-menu.collapse, .component-navbar-split .dropdown-menu.collapse",
+        function () {
+            updateNavOpen();
+        }
+    );
+
+    // Desktop hover tracking
+    $(document).on(
+        "mouseenter",
+        ".component-navbar-primary .nav-item.dropdown, .component-navbar-split .nav-item.dropdown",
+        function () {
+            if ($(window).width() >= 992) {
+                $(this).addClass("is-hovering");
+                updateNavOpen();
+            }
+        }
+    );
+
+    $(document).on(
+        "mouseleave",
+        ".component-navbar-primary .nav-item.dropdown, .component-navbar-split .nav-item.dropdown",
+        function () {
+            if ($(window).width() >= 992) {
+                $(this).removeClass("is-hovering");
+                updateNavOpen();
+            }
+        }
+    );
+
+    // Prevent dropdown clicks from bubbling upward
+    document.querySelectorAll(".dropdown-menu").forEach(function (element) {
+        element.addEventListener("click", function (e) {
+            e.stopPropagation();
+        });
+    });
+
+    removeLevelFourChildren();
+
+    $(window).on("resize", function () {
+        if ($(window).width() < 992) {
+            $(".component-navbar-primary .nav-item.dropdown, .component-navbar-split .nav-item.dropdown")
+                .removeClass("is-hovering");
+        }
+
+        removeLevelFourChildren();
+        updateNavOpen();
+    });
+
+    updateNavOpen();
+});

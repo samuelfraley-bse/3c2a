@@ -158,7 +158,10 @@ def parse_play(text: str, offense: str, defense: str) -> dict:
         'tackler_2': None,
     }
 
-    p['is_td'] = bool(RE_TD.search(text))
+    # TD is true only when the offense scores — interception/fumble returns that end
+    # in a touchdown contain "TOUCHDOWN" in the text but the score belongs to the defense.
+    _is_int = bool(RE_INT.search(text))
+    p['is_td'] = bool(RE_TD.search(text)) and not _is_int
 
     # Penalty details — try named player first, fall back to anonymous
     p['is_penalty'] = bool(RE_PENALTY_NAMED.search(text) or RE_PENALTY_ANON.search(text))
@@ -280,7 +283,8 @@ def parse_play(text: str, offense: str, defense: str) -> dict:
         p['play_type'] = 'rush'
         p['ball_carrier'] = clean_player(ru.group(1))
         p['yards_gained'] = parse_yards(text)
-        p['is_td'] = bool(RE_TD.search(text))
+        # fumble return TDs score for the defense, not the offense
+        p['is_td'] = bool(RE_TD.search(text)) and not p['is_fumble']
         p['tackler_1'], p['tackler_2'] = parse_tacklers(text)
         return p
 
@@ -339,15 +343,17 @@ def _parse_soup(soup, game_id_override: str = None, schedule_home: str = None, s
 
     game_id = game_id_override if game_id_override else make_game_id(game_date, raw_pbp_home, raw_pbp_away)
 
-    # Schedule-side home/away is authoritative when available. Keep the raw pbp
-    # title names for drive-header matching because those tokens come from the page.
     home_team = schedule_home or raw_pbp_home
     away_team = schedule_away or raw_pbp_away
-    # Align raw page names with schedule home/away for drive header matching.
-    # The og:title is sometimes in away-vs-home order; detect and correct.
-    if (schedule_home and schedule_away and raw_pbp_home not in ('HOME',)
-            and _team_matches(schedule_away, raw_pbp_home)
-            and _team_matches(schedule_home, raw_pbp_away)):
+    # When schedule names are available use them directly for drive-header matching —
+    # og:title sometimes uses abbreviations or mascot names that mismatch drive headers.
+    # Fall back to og:title names (with swap detection) only when schedule is absent.
+    if schedule_home and schedule_away:
+        match_home = home_team
+        match_away = away_team
+    elif (raw_pbp_home not in ('HOME',)
+            and _team_matches(schedule_away or away_team, raw_pbp_home)
+            and _team_matches(schedule_home or home_team, raw_pbp_away)):
         match_home = raw_pbp_away
         match_away = raw_pbp_home
     else:
@@ -448,13 +454,15 @@ def _parse_soup(soup, game_id_override: str = None, schedule_home: str = None, s
         row_down = None
         row_distance = None
         row_field_position = None
+        row_is_goal = False
 
         # Parse situation cell  "1st and 10 at MONTEREY17" or "1st and 10 at SAN MATE48"
         sit = RE_DOWN_DIST.search(situation_text)
         if sit:
             row_down = int(sit.group(1))
             dist_raw = sit.group(2)
-            row_distance = None if dist_raw.lower() == 'goal' else int(dist_raw)
+            row_is_goal = dist_raw.lower() == 'goal'
+            row_distance = None if row_is_goal else int(dist_raw)
             row_field_position = normalize_field_position(sit.group(3))
 
         play_id += 1
@@ -488,6 +496,10 @@ def _parse_soup(soup, game_id_override: str = None, schedule_home: str = None, s
                     field_pos_side_val = 'own' if _norm(prefix) in _norm(offense) else 'opponent'
                 if field_pos_side_val and yardline_raw is not None:
                     yardline_100_val = 100 - yardline_raw if field_pos_side_val == 'own' else yardline_raw
+
+        # Goal-to-go: distance = yards to end zone (yardline_100)
+        if row_is_goal and yardline_100_val is not None:
+            row_distance = yardline_100_val
 
         plays.append({
             'game_id': game_id,

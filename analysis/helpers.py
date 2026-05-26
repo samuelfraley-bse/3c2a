@@ -21,19 +21,22 @@ def load_plays() -> pd.DataFrame:
     df = pd.read_csv(DATA_PATH)
     # scrimmage plays only
     df = df[df["play_type"].isin(["rush", "pass"])].copy()
-    df = df[df["down"].notna() & df["distance"].notna()].copy()
-    df["down"] = df["down"].astype(int)
-    df["distance"] = df["distance"].astype(float)
+    df["down"] = pd.to_numeric(df["down"], errors="coerce")
+    df["distance"] = pd.to_numeric(df["distance"], errors="coerce")
+    # down/distance may be null for some plays (e.g. goal-to-go, parse gaps)
+    # keep all plays for yardage totals; flag which have down/distance for rate metrics
+    df["has_down_distance"] = df["down"].notna() & df["distance"].notna()
     return df
 
 
 def add_flags(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
 
-    # success
-    first = df["down"] == 1
-    second = df["down"] == 2
-    third_fourth = df["down"].isin([3, 4])
+    # success (only meaningful where down/distance are known)
+    hdd = df["has_down_distance"]
+    first = hdd & (df["down"] == 1)
+    second = hdd & (df["down"] == 2)
+    third_fourth = hdd & df["down"].isin([3, 4])
     df["success"] = (
         (first & (df["yards_gained"] >= 0.4 * df["distance"]))
         | (second & (df["yards_gained"] >= 0.6 * df["distance"]))
@@ -48,12 +51,12 @@ def add_flags(df: pd.DataFrame) -> pd.DataFrame:
 
     # passing down: 2nd & 8+, 3rd/4th & 5+
     df["passing_down"] = (
-        ((df["down"] == 2) & (df["distance"] >= 8))
-        | (df["down"].isin([3, 4]) & (df["distance"] >= 5))
+        (hdd & (df["down"] == 2) & (df["distance"] >= 8))
+        | (hdd & df["down"].isin([3, 4]) & (df["distance"] >= 5))
     )
 
     # early down: 1st & 2nd that are not passing downs
-    df["early_down"] = df["down"].isin([1, 2]) & ~df["passing_down"]
+    df["early_down"] = hdd & df["down"].isin([1, 2]) & ~df["passing_down"]
 
     # red zone: opponent side, yardline_100 <= 20
     df["redzone"] = (df["field_pos_side"] == "opponent") & (df["yardline_100"] <= 20)
