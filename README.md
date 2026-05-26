@@ -78,38 +78,152 @@ Columns: `game_id`, `prefix_a`, `prefix_b`, `canonical_a`, `canonical_b` *(blank
 
 ### Step 3 — Fill the crosswalk
 
-Open a new Claude conversation and paste this prompt:
+Most prefixes resolve automatically via substring matching. Use the script below, which handles clean prefixes (`FOOTHILL`, `REEDLEY`) automatically and requires a manual mapping dict only for abbreviations and mascot-name variants (`CCSF`, `ARC`, `MSJC-FB`, etc.).
 
-> I have a football play-by-play crosswalk CSV. Each row is one game. I need you to fill in `canonical_a` and `canonical_b` — the full team name that each prefix belongs to. You know the two teams in the game from `team_1` and `team_2`. Match each prefix to one of those two teams. Here is the CSV:
->
-> [paste the contents of `prefix_crosswalk_draft.csv`]
+```python
+import csv, re
 
-Save the result as:
+def norm(s): return re.sub(r'[^a-z0-9]', '', s.lower())
 
+# Add entries here for any prefix that doesn't substring-match its team name
+MANUAL = {
+    'CCSF':    'San Francisco',
+    'SRJC':    'Santa Rosa',
+    'ARC':     'American River',
+    'ECC':     'El Camino',
+    'DVC':     'Diablo Valley',
+    'FCC':     'Fresno City',
+    'LMC':     'Los Medanos',
+    'MER':     'Merced',
+    'COD':     'Desert',
+    'COC':     'Canyons',
+    'CSM':     'San Mateo',
+    'CHAF':    'Chaffey',
+    'CHAB':    'Chabot',
+    'DAC':     'De Anza',
+    'SBCC':    'Santa Barbara',
+    'SBVC':    'San Bernardino Valley',
+    'WLAC':    'West LA',
+    'LASW':    'LA Southwest',
+    'MSJC-FB': 'Mt. San Jacinto',
+    'GWC-FB':  'Golden West',
+    'OCC-FB':  'Orange Coast',
+    'ELCO':    'El Camino',
+    'SADDLE':  'Saddleback',
+    'SDMESA':  'San Diego Mesa',
+    'VVC':     'Victor Valley',
+    'PAL':     'Palomar',
+    'RCC':     'Riverside',
+    'FRC':     'Feather River',
+    'FEATHER': 'Feather River',
+    'FRESNO':  'Fresno City',
+    'MODESTO': 'Modesto',
+    'SEQUOIAS':'Sequoias',
+    'SJC':     'Sierra',
+    'CAB':     'Cabrillo',
+    'GLEN':    'Glendale',
+    'FOOT':    'Foothill',
+    'LANE':    'Laney',
+    'LANEY':   'Laney',
+    'SAN JOAQ':'San Joaquin Delta',
+    'COALINGA':'Coalinga',
+}
+
+def resolve(prefix, t1, t2):
+    if prefix in MANUAL:
+        return MANUAL[prefix]
+    np = norm(prefix)
+    nt1, nt2 = norm(t1), norm(t2)
+    m1 = np in nt1 or nt1.startswith(np)
+    m2 = np in nt2 or nt2.startswith(np)
+    if m1 and not m2: return t1
+    if m2 and not m1: return t2
+    return ''  # needs manual review
+
+rows = list(csv.DictReader(open('outputs/2024-25/prefix_crosswalk_draft.csv', encoding='utf-8')))
+out, problems = [], []
+for r in rows:
+    ca = resolve(r['prefix_a'], r['team_1'], r['team_2'])
+    cb = resolve(r['prefix_b'], r['team_1'], r['team_2'])
+    out.append({'game_id': r['game_id'], 'prefix_a': r['prefix_a'], 'prefix_b': r['prefix_b'],
+                'canonical_a': ca, 'canonical_b': cb})
+    if not ca or not cb or ca == cb:
+        problems.append(r)
+
+with open('outputs/2024-25/prefix_crosswalk.csv', 'w', newline='', encoding='utf-8') as f:
+    w = csv.DictWriter(f, fieldnames=['game_id','prefix_a','prefix_b','canonical_a','canonical_b'])
+    w.writeheader(); w.writerows(out)
+
+print(f'Written: {len(out)} rows, Problems: {len(problems)}')
+for p in problems:
+    print(p)
 ```
-outputs/2024-25/prefix_crosswalk.csv
+
+Run the script, then check any rows printed under `Problems` — add them to `MANUAL` and re-run until zero problems remain.
+
+**Audit** — verify every resolved canonical is actually one of the game's two teams and they don't collide:
+
+```python
+for r, o in zip(rows, out):
+    assert o['canonical_a'] in (r['team_1'], r['team_2']), r
+    assert o['canonical_b'] in (r['team_1'], r['team_2']), r
+    assert o['canonical_a'] != o['canonical_b'], r
+print('Audit passed')
 ```
 
-**Tips:**
-- For ambiguous prefixes like `MT. SAN` (could be Mt. San Antonio or Mt. San Jacinto), both teams are in `team_1`/`team_2` so Claude can resolve it unambiguously
-- Double-check rows where `note` contains a warning (more than two prefixes found)
-- Keep the draft file untouched as a reference
+Save the completed file as `outputs/2024-25/prefix_crosswalk.csv`.
 
 ---
 
-### Step 4 — Re-scrape with crosswalk to enrich field position
+### Step 4 — Re-parse affected games with the crosswalk
 
-```powershell
-python pipeline/01_scrape_season.py --season 2024-25 --plays-only --crosswalk outputs/2024-25/prefix_crosswalk.csv
+After the crosswalk is filled you can audit existing `plays.csv` data to find games with wrong `field_pos_side` without re-scraping everything:
+
+```python
+import csv, re
+
+def norm(s): return re.sub(r'[^a-z0-9]', '', s.lower())
+RE_PREFIX = re.compile(r'^([A-Z][A-Z0-9\s\.\-]*?)\d+$')
+
+xwalk = {}
+with open('outputs/2024-25/prefix_crosswalk.csv', newline='', encoding='utf-8') as f:
+    for r in csv.DictReader(f):
+        xwalk.setdefault(r['game_id'], {})[r['prefix_a']] = r['canonical_a']
+        xwalk.setdefault(r['game_id'], {})[r['prefix_b']] = r['canonical_b']
+
+wrong_games = set()
+with open('outputs/2024-25/plays.csv', newline='', encoding='utf-8') as f:
+    for row in csv.DictReader(f):
+        fp = row.get('field_position','').strip()
+        side = row.get('field_pos_side','').strip()
+        offense = row.get('offense','').strip()
+        gid = row.get('game_id','').strip()
+        if not fp or not side or not offense or not gid: continue
+        m = RE_PREFIX.match(fp.strip().upper())
+        if not m: continue
+        prefix = m.group(1).strip()
+        owner = xwalk.get(gid, {}).get(prefix)
+        if owner is None: continue
+        if (('own' if owner == offense else 'opponent') != side):
+            wrong_games.add(gid)
+
+print(f'Games needing re-parse: {len(wrong_games)}')
+print(' '.join(sorted(wrong_games)))
 ```
 
-This re-parses every game with the crosswalk, writing three enriched columns directly into `plays.csv`:
+Then re-parse only those games (fetches from network — use a safe delay):
 
-- `field_pos_side`: `own` or `opponent` (relative to the offense)
-- `yardline_raw`: numeric yardline extracted from the field position token
-- `yardline_100`: yards to the opponent end zone (own 25 → `75`, opponent 25 → `25`)
+```powershell
+python pipeline/01_scrape_season.py --season 2024-25 --plays-only --delay 15 --game-ids <ids from above>
+```
 
-> **Note:** You can also pass `--crosswalk` during the initial Step 1 scrape if the crosswalk already exists from a prior season. Step 4 is only needed when filling the crosswalk after the fact.
+If the site rate-limits you, save the HTML manually (File → Save As in browser) into a `manual/` directory named `<game_id>.html`, then:
+
+```powershell
+python pipeline/01_scrape_season.py --season 2024-25 --plays-only --manual-dir manual --game-ids <ids>
+```
+
+> **Note:** You can also pass `--crosswalk` during the initial Step 1 scrape if the crosswalk already exists from a prior season — this avoids needing Step 4 at all.
 
 ---
 
