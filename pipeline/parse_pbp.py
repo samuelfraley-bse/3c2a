@@ -136,6 +136,13 @@ def parse_tacklers(text: str):
     return t1, t2
 
 
+def _stamp_pass_flags(p: dict) -> None:
+    p['is_dropback'] = True
+    p['is_attempt'] = not p['is_sack']
+    p['completion'] = p['pass_result'] == 'complete'
+    p['is_interception'] = p['pass_result'] == 'int'
+
+
 def parse_play(text: str, offense: str, defense: str) -> dict:
     """Extract structured fields from a single play description string."""
     p = {
@@ -144,6 +151,10 @@ def parse_play(text: str, offense: str, defense: str) -> dict:
         'targeted_receiver': None,
         'pass_result': None,
         'yards_gained': None,
+        'is_dropback': False,
+        'is_attempt': False,
+        'completion': False,
+        'is_interception': False,
         'is_td': False,
         'is_sack': False,
         'is_fumble': False,
@@ -193,6 +204,7 @@ def parse_play(text: str, offense: str, defense: str) -> dict:
         p['ball_carrier'] = clean_player(sk.group(1))
         p['yards_gained'] = parse_yards(text)
         p['tackler_1'], p['tackler_2'] = parse_tacklers(text)
+        _stamp_pass_flags(p)
         return p
 
     # Field goal
@@ -243,6 +255,7 @@ def parse_play(text: str, offense: str, defense: str) -> dict:
         p['pass_result'] = 'int'
         p['yards_gained'] = 0
         p['tackler_1'], p['tackler_2'] = parse_tacklers(text)
+        _stamp_pass_flags(p)
         return p
 
     # Pass complete — Format A: named receiver ("pass complete to X for")
@@ -254,6 +267,7 @@ def parse_play(text: str, offense: str, defense: str) -> dict:
         p['pass_result'] = 'complete'
         p['yards_gained'] = parse_yards(text)
         p['tackler_1'], p['tackler_2'] = parse_tacklers(text)
+        _stamp_pass_flags(p)
         return p
 
     # Pass complete — Format B: no named receiver ("pass complete for N yards")
@@ -264,6 +278,7 @@ def parse_play(text: str, offense: str, defense: str) -> dict:
         p['pass_result'] = 'complete'
         p['yards_gained'] = parse_yards(text)
         p['tackler_1'], p['tackler_2'] = parse_tacklers(text)
+        _stamp_pass_flags(p)
         return p
 
     # Pass incomplete
@@ -275,6 +290,7 @@ def parse_play(text: str, offense: str, defense: str) -> dict:
         p['pass_result'] = 'incomplete'
         p['yards_gained'] = 0
         p['tackler_1'], p['tackler_2'] = parse_tacklers(text)
+        _stamp_pass_flags(p)
         return p
 
     # Rush
@@ -533,6 +549,7 @@ FIELDS = [
     'offense', 'defense',
     'play_type', 'ball_carrier', 'targeted_receiver',
     'pass_result', 'yards_gained',
+    'is_dropback', 'is_attempt', 'completion', 'is_interception',
     'is_td', 'is_sack', 'is_fumble', 'fumble_recovered_by',
     'is_penalty', 'penalty_team', 'penalty_type', 'penalty_player', 'penalty_yards',
     'fg_result',

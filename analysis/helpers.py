@@ -61,14 +61,6 @@ def add_flags(df: pd.DataFrame) -> pd.DataFrame:
     # red zone: opponent side, yardline_100 <= 20
     df["redzone"] = (df["field_pos_side"] == "opponent") & (df["yardline_100"] <= 20)
 
-    # dropback: any play_type='pass' row (pass attempts + sacks)
-    # pass attempts = dropbacks where is_sack=False
-    # scrambles are indistinguishable from designed runs (both are play_type='rush')
-    df["is_dropback"] = df["play_type"] == "pass"
-
-    # completion (pass result)
-    df["completion"] = df["pass_result"].isin(["complete", "td"])
-
     # rush stuff: rush for <= 0 yards
     df["run_stuff"] = (df["play_type"] == "rush") & (df["yards_gained"] <= 0)
 
