@@ -251,7 +251,7 @@ def parse_play(text: str, offense: str, defense: str) -> dict:
         p['play_type'] = 'pass'
         p['ball_carrier'] = clean_player(pc.group(1))
         p['targeted_receiver'] = clean_player(pc.group(2))
-        p['pass_result'] = 'td' if p['is_td'] else 'complete'
+        p['pass_result'] = 'complete'
         p['yards_gained'] = parse_yards(text)
         p['tackler_1'], p['tackler_2'] = parse_tacklers(text)
         return p
@@ -261,7 +261,7 @@ def parse_play(text: str, offense: str, defense: str) -> dict:
     if pc2:
         p['play_type'] = 'pass'
         p['ball_carrier'] = clean_player(pc2.group(1))
-        p['pass_result'] = 'td' if p['is_td'] else 'complete'
+        p['pass_result'] = 'complete'
         p['yards_gained'] = parse_yards(text)
         p['tackler_1'], p['tackler_2'] = parse_tacklers(text)
         return p
