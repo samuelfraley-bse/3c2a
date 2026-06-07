@@ -103,8 +103,9 @@ One row per play across all scraped games. Source: each game's play-by-play page
 | column | type | description |
 |---|---|---|
 | `play_type` | string | `rush`, `pass`, `punt`, `kickoff`, `field_goal`, `pat`, `two_point`, `penalty` |
-| `ball_carrier` | string | Primary player name (rusher, passer, kicker) |
-| `targeted_receiver` | string | Receiver name on pass plays (if named) |
+| `passer` | string | Passer name on pass plays (including sacks); null otherwise |
+| `rusher` | string | Ball carrier name on rush, kickoff, punt, field_goal, pat, and two_point plays; null otherwise |
+| `receiver` | string | Targeted receiver name on pass plays (if named); null otherwise |
 | `pass_result` | string | `complete`, `incomplete`, `int`, `td` — null for non-pass plays |
 | `yards_gained` | int | Net yards on the play. **Sack yards are negative and count against rushing, not passing.** |
 

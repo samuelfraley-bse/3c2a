@@ -153,8 +153,9 @@ def parse_play(text: str, offense: str, defense: str) -> dict:
     """Extract structured fields from a single play description string."""
     p = {
         'play_type': None,
-        'ball_carrier': None,
-        'targeted_receiver': None,
+        'passer': None,
+        'rusher': None,
+        'receiver': None,
         'pass_result': None,
         'yards_gained': None,
         'is_dropback': False,
@@ -207,7 +208,7 @@ def parse_play(text: str, offense: str, defense: str) -> dict:
     if sk:
         p['play_type'] = 'pass'
         p['is_sack'] = True
-        p['ball_carrier'] = clean_player(sk.group(1))
+        p['passer'] = clean_player(sk.group(1))
         p['yards_gained'] = parse_yards(text)
         p['tackler_1'], p['tackler_2'] = parse_tacklers(text)
         _stamp_pass_flags(p)
@@ -218,7 +219,7 @@ def parse_play(text: str, offense: str, defense: str) -> dict:
     if sk_alt:
         p['play_type'] = 'pass'
         p['is_sack'] = True
-        p['ball_carrier'] = clean_player(sk_alt.group(1))
+        p['passer'] = clean_player(sk_alt.group(1))
         p['yards_gained'] = parse_yards(text)
         p['tackler_1'], p['tackler_2'] = parse_tacklers(text)
         _stamp_pass_flags(p)
@@ -228,7 +229,7 @@ def parse_play(text: str, offense: str, defense: str) -> dict:
     fg = RE_FG.search(text)
     if fg:
         p['play_type'] = 'field_goal'
-        p['ball_carrier'] = clean_player(fg.group(1))
+        p['rusher'] = clean_player(fg.group(1))
         p['fg_result'] = fg.group(3).lower()
         return p
 
@@ -236,7 +237,7 @@ def parse_play(text: str, offense: str, defense: str) -> dict:
     fg_blocked = RE_FG_BLOCKED.search(text)
     if fg_blocked:
         p['play_type'] = 'field_goal'
-        p['ball_carrier'] = clean_player(fg_blocked.group(1))
+        p['rusher'] = clean_player(fg_blocked.group(1))
         p['fg_result'] = 'blocked'
         return p
 
@@ -244,7 +245,7 @@ def parse_play(text: str, offense: str, defense: str) -> dict:
     pat = RE_PAT.search(text)
     if pat:
         p['play_type'] = 'pat'
-        p['ball_carrier'] = clean_player(pat.group(1))
+        p['rusher'] = clean_player(pat.group(1))
         p['fg_result'] = pat.group(2).lower()
         return p
 
@@ -252,7 +253,7 @@ def parse_play(text: str, offense: str, defense: str) -> dict:
     two = RE_TWO_PT.search(text)
     if two:
         p['play_type'] = 'two_point'
-        p['ball_carrier'] = clean_player(two.group(1))
+        p['rusher'] = clean_player(two.group(1))
         p['fg_result'] = two.group(2).lower()
         return p
 
@@ -260,7 +261,7 @@ def parse_play(text: str, offense: str, defense: str) -> dict:
     ko = RE_KICKOFF.search(text)
     if ko:
         p['play_type'] = 'kickoff'
-        p['ball_carrier'] = clean_player(ko.group(1))
+        p['rusher'] = clean_player(ko.group(1))
         p['yards_gained'] = int(ko.group(2))
         return p
 
@@ -268,7 +269,7 @@ def parse_play(text: str, offense: str, defense: str) -> dict:
     pu = RE_PUNT.search(text)
     if pu:
         p['play_type'] = 'punt'
-        p['ball_carrier'] = clean_player(pu.group(1))
+        p['rusher'] = clean_player(pu.group(1))
         p['yards_gained'] = int(pu.group(2)) if pu.group(2) else parse_yards(text)
         return p
 
@@ -276,7 +277,7 @@ def parse_play(text: str, offense: str, defense: str) -> dict:
     pi_int = RE_PASS_INT.search(text)
     if pi_int:
         p['play_type'] = 'pass'
-        p['ball_carrier'] = clean_player(pi_int.group(1))
+        p['passer'] = clean_player(pi_int.group(1))
         p['pass_result'] = 'int'
         p['yards_gained'] = 0
         p['tackler_1'], p['tackler_2'] = parse_tacklers(text)
@@ -287,8 +288,8 @@ def parse_play(text: str, offense: str, defense: str) -> dict:
     pc = RE_PASS_COMPLETE_A.search(text)
     if pc:
         p['play_type'] = 'pass'
-        p['ball_carrier'] = clean_player(pc.group(1))
-        p['targeted_receiver'] = clean_player(pc.group(2))
+        p['passer'] = clean_player(pc.group(1))
+        p['receiver'] = clean_player(pc.group(2))
         p['pass_result'] = 'complete'
         p['yards_gained'] = parse_yards(text)
         p['tackler_1'], p['tackler_2'] = parse_tacklers(text)
@@ -299,7 +300,7 @@ def parse_play(text: str, offense: str, defense: str) -> dict:
     pc2 = RE_PASS_COMPLETE_B.search(text)
     if pc2:
         p['play_type'] = 'pass'
-        p['ball_carrier'] = clean_player(pc2.group(1))
+        p['passer'] = clean_player(pc2.group(1))
         p['pass_result'] = 'complete'
         p['yards_gained'] = parse_yards(text)
         p['tackler_1'], p['tackler_2'] = parse_tacklers(text)
@@ -310,8 +311,8 @@ def parse_play(text: str, offense: str, defense: str) -> dict:
     pi = RE_PASS_INCOMPLETE.search(text)
     if pi:
         p['play_type'] = 'pass'
-        p['ball_carrier'] = clean_player(pi.group(1))
-        p['targeted_receiver'] = clean_player(pi.group(2)) if pi.group(2) else None
+        p['passer'] = clean_player(pi.group(1))
+        p['receiver'] = clean_player(pi.group(2)) if pi.group(2) else None
         p['pass_result'] = 'incomplete'
         p['yards_gained'] = 0
         p['tackler_1'], p['tackler_2'] = parse_tacklers(text)
@@ -322,9 +323,9 @@ def parse_play(text: str, offense: str, defense: str) -> dict:
     pa = RE_PASS_ATTEMPT.search(text)
     if pa:
         p['play_type'] = 'pass'
-        p['ball_carrier'] = clean_player(pa.group(1))
+        p['passer'] = clean_player(pa.group(1))
         receiver = pa.group(2).strip()
-        p['targeted_receiver'] = clean_player(receiver) if receiver.upper() != 'TEAM' else None
+        p['receiver'] = clean_player(receiver) if receiver.upper() != 'TEAM' else None
         if pa.group(3).lower() == 'good':
             p['pass_result'] = 'complete'
             p['yards_gained'] = parse_yards(text)
@@ -342,7 +343,7 @@ def parse_play(text: str, offense: str, defense: str) -> dict:
     ru = RE_RUSH.search(text)
     if ru:
         p['play_type'] = 'rush'
-        p['ball_carrier'] = clean_player(ru.group(1))
+        p['rusher'] = clean_player(ru.group(1))
         p['yards_gained'] = parse_yards(text)
         # fumble return TDs score for the defense, not the offense
         p['is_td'] = bool(RE_TD.search(text)) and not p['is_fumble']
@@ -592,7 +593,7 @@ FIELDS = [
     'play_id', 'drive_id', 'drive_start_time',
     'quarter', 'down', 'distance', 'field_position', 'yardline_raw', 'field_pos_side', 'yardline_100',
     'offense', 'defense',
-    'play_type', 'ball_carrier', 'targeted_receiver',
+    'play_type', 'passer', 'rusher', 'receiver',
     'pass_result', 'yards_gained',
     'is_dropback', 'is_attempt', 'completion', 'is_interception',
     'is_td', 'is_sack', 'is_fumble', 'fumble_recovered_by',
