@@ -1,14 +1,17 @@
 """
-Fill canonical_name and position in outputs/{season}/pbp_names.csv from roster data.
+Fill canonical_name and position in outputs/{season}/pbp_names.csv from participation data.
+
+Primary source: participation.csv (per-game rosters, full team coverage).
+Supplementary: players.csv (position lookup only, after canonical name is resolved).
 
 Rules:
-  - Confident unique roster match -> canonical_name = exact roster player_name, position = roster pos
-  - Two or more confident roster matches -> canonical_name = pbp_name, position = joined positions, flagged = ambiguous
-  - No confident match -> canonical_name = pbp_name, position blank, flagged = no_match
+  - Confident unique match -> canonical_name = exact participation player_name, position from players.csv if available
+  - Two or more confident matches -> canonical_name = pbp_name, flagged = ambiguous
+  - No confident match -> canonical_name = pbp_name, flagged = no_match
   - flagged = no_roster rows are preserved as-is
 
 Usage:
-    python pipeline/09_match_pbp_names.py --season 2025-26
+    python pipeline/07_match_pbp_names.py --season 2025-26
 """
 
 from __future__ import annotations
@@ -121,15 +124,15 @@ class Candidate:
     reason: str
 
 
-def build_player_entry(row: dict[str, str]) -> dict[str, object]:
-    tokens = tokenize_name(row["player_name"])
+def build_player_entry(player_name: str, position: str = "") -> dict[str, object]:
+    tokens = tokenize_name(player_name)
     base_tokens = strip_suffix_tokens(tokens)
     first = base_tokens[0] if base_tokens else ""
     last = base_tokens[-1] if len(base_tokens) >= 2 else ""
     middle = tuple(base_tokens[1:-1]) if len(base_tokens) > 2 else ()
     return {
-        "player_name": row["player_name"],
-        "position": row["pos"],
+        "player_name": player_name,
+        "position": position,
         "tokens": tokens,
         "base_tokens": base_tokens,
         "first": first,
@@ -239,12 +242,27 @@ def main() -> None:
 
     out_dir = os.path.join(args.out, args.season)
     pbp_path = os.path.join(out_dir, "pbp_names.csv")
+    participation_path = os.path.join(out_dir, "participation.csv")
     players_path = os.path.join(out_dir, "players.csv")
 
-    roster_by_team: dict[str, list[dict[str, object]]] = defaultdict(list)
-    with open(players_path, newline="", encoding="utf-8-sig") as f:
+    # Primary: participation.csv — unique player names per team (no position)
+    participation_by_team: dict[str, list[dict[str, object]]] = defaultdict(list)
+    seen_participation: dict[str, set[str]] = defaultdict(set)
+    with open(participation_path, newline="", encoding="utf-8-sig") as f:
         for row in csv.DictReader(f):
-            roster_by_team[row["team_name"]].append(build_player_entry(row))
+            team = row["team_name"]
+            name = row["player_name"]
+            if name not in seen_participation[team]:
+                seen_participation[team].add(name)
+                participation_by_team[team].append(build_player_entry(name))
+
+    # Supplementary: players.csv — position lookup by (team, canonical_name)
+    pos_lookup: dict[tuple[str, str], str] = {}
+    if os.path.exists(players_path):
+        with open(players_path, newline="", encoding="utf-8-sig") as f:
+            for row in csv.DictReader(f):
+                if row.get("pos"):
+                    pos_lookup[(row["team_name"], row["player_name"])] = row["pos"]
 
     with open(pbp_path, newline="", encoding="utf-8-sig") as f:
         rows = list(csv.DictReader(f))
@@ -253,17 +271,16 @@ def main() -> None:
     for row in rows:
         row.setdefault("review_flag", "")
         if row["flagged"] == "no_roster":
-            row["review_flag"] = ""
             stats["no_roster"] += 1
             continue
 
-        roster = roster_by_team.get(row["team"], [])
+        roster = participation_by_team.get(row["team"], [])
         candidates = find_candidates(row["pbp_name"], roster)
 
         if len(candidates) == 1:
             candidate = candidates[0]
             row["canonical_name"] = candidate.player_name
-            row["position"] = candidate.position
+            row["position"] = pos_lookup.get((row["team"], candidate.player_name), "")
             row["flagged"] = ""
             row["review_flag"] = ""
             stats[f"matched_{candidate.reason}"] += 1
@@ -271,7 +288,9 @@ def main() -> None:
 
         row["canonical_name"] = row["pbp_name"]
         if len(candidates) > 1:
-            row["position"] = "/".join(dict.fromkeys(candidate.position for candidate in candidates))
+            row["position"] = "/".join(dict.fromkeys(
+                pos_lookup.get((row["team"], c.player_name), "") for c in candidates
+            ))
             row["flagged"] = "ambiguous"
             row["review_flag"] = "needs_review"
             stats["ambiguous"] += 1
