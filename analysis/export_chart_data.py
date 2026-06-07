@@ -156,20 +156,31 @@ def chart_game_passing_down_pass(df):
     print(f"  chart_game_passing_down_pass.csv ({len(rows)} games)")
 
 
+ABB_MAP = {
+    "20250830_8cjh": "MPC",   "20250906_tjag": "COR",  "20250913_0tz1": "REED",
+    "20250920_47d4": "SIER",  "20250927_h3ae": "SAC",  "20251010_e15n": "LANEY",
+    "20251018_4eui": "CSM",   "20251024_zu0m": "DVC",  "20251101_ck1p": "CCSF",
+    "20251108_o06f": "SJCC",  "20251122_7wb6": "COS",
+}
+
+
 def chart_game_avg_start_pos(df_all):
     drives = build_drive_summary(df_all)
     foothill_gids = drives[(drives["offense"] == TEAM) | (drives["defense"] == TEAM)]["game_id"].unique()
     games = sorted(foothill_gids, key=lambda g: g[:8])
 
     rows = []
-    for gid in games:
+    for i, gid in enumerate(games, 1):
         g = drives[drives["game_id"] == gid]
         off = g[g["offense"] == TEAM]["start_yardline"].dropna()
         dff = g[g["defense"] == TEAM]["start_yardline"].dropna()
         rows.append({
             "game_id":         gid,
-            "off_avg_start":   round(off.mean(), 1) if len(off) else None,
-            "def_avg_start":   round(dff.mean(), 1) if len(dff) else None,
+            "opponent":        opponent(df_all, gid),
+            "opp_abbr":        ABB_MAP.get(gid, gid),
+            "game_order":      i,
+            "off_avg_start":   round(100 - off.mean(), 1) if len(off) else None,
+            "def_avg_start":   round(100 - dff.mean(), 1) if len(dff) else None,
         })
     pd.DataFrame(rows).to_csv(f"{OUT_DIR}/chart_game_avg_start_pos.csv", index=False)
     print(f"  chart_game_avg_start_pos.csv ({len(rows)} games)")

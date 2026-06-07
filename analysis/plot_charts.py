@@ -127,11 +127,16 @@ def plot_passing_down_pass():
 def plot_avg_start_pos():
     df = load("chart_game_avg_start_pos.csv")
     fig, ax = plt.subplots(figsize=(10, 5))
-    ax.plot(df["opp_abbr"], df["off_avg_start"], color=RED,   marker="o", linewidth=2, label="Offense start")
-    ax.plot(df["opp_abbr"], df["def_avg_start"], color=BLACK, marker="s", linewidth=2, label="Opponent start")
-    ax.invert_yaxis()
+    ax.plot(df["opp_abbr"], df["off_avg_start"], color=RED,   marker="o", linewidth=2, label="Foothill offense avg start")
+    ax.plot(df["opp_abbr"], df["def_avg_start"], color=BLACK, marker="s", linewidth=2, label="Opponent offense avg start")
+    ax.set_ylim(0, 100)
+    ticks = [10, 20, 30, 40, 50, 60, 70, 80, 90]
+    labels = ["OWN 10","OWN 20","OWN 30","OWN 40","50","OPP 40","OPP 30","OPP 20","OPP 10"]
+    ax.set_yticks(ticks)
+    ax.set_yticklabels(labels)
+    ax.axhline(50, color=GRAY, linewidth=0.8, linestyle="--")
     ax.legend(prop=FONT_MEDIUM, frameon=False)
-    style_ax(ax, "Avg Drive Starting Position by Game", ylabel="Yardline 100 (lower = closer to scoring)")
+    style_ax(ax, "Avg Drive Starting Position by Game", ylabel="Field Position (higher = deeper in opp. territory)")
     save(fig, "07_avg_start_pos_by_game")
 
 

@@ -94,21 +94,19 @@ def save(fig, name):
 def plot_early_down_defense():
     df = load("early_down", "defense")
     metrics = [
-        ("success_rt",    "Success Rate %",    True,  "Success Rate Allowed"),
-        ("yards_per_play","Yards per Play",     True,  "Yards per Play Allowed"),
-        ("run_stuff_pct", "Run Stuff %",        False, "Run Stuff %"),
-        ("sack_pct",      "Sack %",             False, "Sack %"),
-        ("explosive_pct", "Explosive %",        True,  "Explosive % Allowed"),
+        ("success_rt",    "Success Rate %",    True,  "Success Rate Allowed",      "12a"),
+        ("yards_per_play","Yards per Play",     True,  "Yards per Play Allowed",    "12b"),
+        ("run_stuff_pct", "Run Stuff %",        False, "Run Stuff %",               "12c"),
+        ("sack_pct",      "Sack %",             False, "Sack %",                    "12d"),
+        ("explosive_pct", "Explosive %",        True,  "Explosive % Allowed",       "12e"),
     ]
-    fig, axes = plt.subplots(1, 5, figsize=(22, 6))
-    fig.suptitle("Early Down Defense — Top 15", fontproperties=FONT_HEAVY, fontsize=15, color=BLACK, y=1.01)
-    for ax, (metric, label, lower_better, title) in zip(axes, metrics):
-        rank_col = f"{metric}_rank"
-        bar_chart(ax, df, metric, rank_col, n=15, lower_better=lower_better)
-        style_ax(ax, title, xlabel=label)
+    for metric, label, lower_better, title, num in metrics:
+        fig, ax = plt.subplots(figsize=(8, 6))
+        bar_chart(ax, df, metric, f"{metric}_rank", n=15, lower_better=lower_better)
+        style_ax(ax, f"Early Down Defense — {title} (Top 15)", xlabel=label)
         ax.set_ylabel("")
-    fig.tight_layout()
-    save(fig, "12_early_down_defense_group")
+        fig.tight_layout()
+        save(fig, f"{num}_early_down_def_{metric}")
 
 
 # ---------------------------------------------------------------------------
@@ -118,20 +116,18 @@ def plot_early_down_defense():
 def plot_finishing_drives_defense():
     df = load("finishing_drives", "defense")
     metrics = [
-        ("pts_per_drive",  "Pts / Drive",        True,  "Points per Drive Allowed"),
-        ("scoring_rate",   "Scoring Rate %",      True,  "Scoring Rate Allowed"),
-        ("td_rate",        "TD Rate %",           True,  "TD Rate Allowed"),
-        ("avg_start_pos",  "Yardline 100",        False, "Avg Opponent Start (yds to go)"),
+        ("pts_per_drive", "Pts / Drive",      True,  "Points per Drive Allowed",        "13a"),
+        ("scoring_rate",  "Scoring Rate %",   True,  "Scoring Rate Allowed",            "13b"),
+        ("td_rate",       "TD Rate %",        True,  "TD Rate Allowed",                 "13c"),
+        ("avg_start_pos", "Yardline 100",     False, "Avg Opponent Start (yds to go)",  "13d"),
     ]
-    fig, axes = plt.subplots(1, 4, figsize=(18, 6))
-    fig.suptitle("Finishing Drives Defense — Top 15", fontproperties=FONT_HEAVY, fontsize=15, color=BLACK, y=1.01)
-    for ax, (metric, label, lower_better, title) in zip(axes, metrics):
-        rank_col = f"{metric}_rank"
-        bar_chart(ax, df, metric, rank_col, n=15, lower_better=lower_better)
-        style_ax(ax, title, xlabel=label)
+    for metric, label, lower_better, title, num in metrics:
+        fig, ax = plt.subplots(figsize=(8, 6))
+        bar_chart(ax, df, metric, f"{metric}_rank", n=15, lower_better=lower_better)
+        style_ax(ax, f"Finishing Drives Defense — {title} (Top 15)", xlabel=label)
         ax.set_ylabel("")
-    fig.tight_layout()
-    save(fig, "13_finishing_drives_defense_group")
+        fig.tight_layout()
+        save(fig, f"{num}_finishing_drives_def_{metric}")
 
 
 # ---------------------------------------------------------------------------
@@ -141,20 +137,18 @@ def plot_finishing_drives_defense():
 def plot_fourth_down_offense():
     df = load("fourth_down", "offense")
     metrics = [
-        ("conv_pct",      "Conversion %",   False, "Conversion %"),
-        ("rush_conv_pct", "Rush Conv %",     False, "Rush Conversion %"),
-        ("pass_pct",      "Pass %",          False, "% Pass Plays"),
-        ("explosives",    "Explosives",      False, "Explosive Plays"),
+        ("conv_pct",      "Conversion %",  False, "Conversion %",       "14a"),
+        ("rush_conv_pct", "Rush Conv %",   False, "Rush Conversion %",  "14b"),
+        ("pass_pct",      "Pass %",        False, "% Pass Plays",       "14c"),
+        ("explosives",    "Explosives",    False, "Explosive Plays",    "14d"),
     ]
-    fig, axes = plt.subplots(1, 4, figsize=(18, 6))
-    fig.suptitle("4th Down Offense — Top 15", fontproperties=FONT_HEAVY, fontsize=15, color=BLACK, y=1.01)
-    for ax, (metric, label, lower_better, title) in zip(axes, metrics):
-        rank_col = f"{metric}_rank"
-        bar_chart(ax, df, metric, rank_col, n=15, lower_better=lower_better)
-        style_ax(ax, title, xlabel=label)
+    for metric, label, lower_better, title, num in metrics:
+        fig, ax = plt.subplots(figsize=(8, 6))
+        bar_chart(ax, df, metric, f"{metric}_rank", n=15, lower_better=lower_better)
+        style_ax(ax, f"4th Down Offense — {title} (Top 15)", xlabel=label)
         ax.set_ylabel("")
-    fig.tight_layout()
-    save(fig, "14_fourth_down_offense_group")
+        fig.tight_layout()
+        save(fig, f"{num}_fourth_down_off_{metric}")
 
 
 # ---------------------------------------------------------------------------
@@ -165,19 +159,19 @@ def plot_turnovers_group():
     ed_off = load("early_down", "offense")
     td_def = load("third_down", "defense")
 
-    fig, axes = plt.subplots(1, 2, figsize=(12, 6))
-    fig.suptitle("Turnovers — Top 15", fontproperties=FONT_HEAVY, fontsize=15, color=BLACK, y=1.01)
-
-    bar_chart(axes[0], ed_off, "turnovers", "turnovers_rank", n=15, lower_better=True)
-    style_ax(axes[0], "Fewest Early Down Turnovers (Off)", xlabel="Turnovers")
-    axes[0].set_ylabel("")
-
-    bar_chart(axes[1], td_def, "turnovers", "turnovers_rank", n=15, lower_better=False)
-    style_ax(axes[1], "Most 3rd Down Turnovers Forced (Def)", xlabel="Turnovers Forced")
-    axes[1].set_ylabel("")
-
+    fig, ax = plt.subplots(figsize=(8, 6))
+    bar_chart(ax, ed_off, "turnovers", "turnovers_rank", n=15, lower_better=True)
+    style_ax(ax, "Fewest Early Down Turnovers — Offense (Top 15)", xlabel="Turnovers")
+    ax.set_ylabel("")
     fig.tight_layout()
-    save(fig, "15_turnovers_group")
+    save(fig, "15a_turnovers_off")
+
+    fig, ax = plt.subplots(figsize=(8, 6))
+    bar_chart(ax, td_def, "turnovers", "turnovers_rank", n=15, lower_better=False)
+    style_ax(ax, "Most 3rd Down Turnovers Forced — Defense (Top 15)", xlabel="Turnovers Forced")
+    ax.set_ylabel("")
+    fig.tight_layout()
+    save(fig, "15b_turnovers_def")
 
 
 # ---------------------------------------------------------------------------

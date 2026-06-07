@@ -39,6 +39,12 @@ RE_PASS_INT = re.compile(
     r'(\w[\w\s\-\'\.]+?)\s+pass intercept', re.IGNORECASE
 )
 RE_SACK = re.compile(r'(\w[\w\s\-\'\.]+?)\s+sacked for', re.IGNORECASE)
+RE_SACK_ALT = re.compile(r'(\w[\w\s\-\'\.]+?)\s+sacked to\s+\w[\w\s\-\'\.]+?\s+for loss of', re.IGNORECASE)
+RE_FG_BLOCKED = re.compile(r'(\w[\w\s\-\'\.]+?)\s+field goal attempt from \d+\s+BLOCKED', re.IGNORECASE)
+RE_PASS_ATTEMPT = re.compile(
+    r'(\w[\w\s\-\'\.]+?)\s+pass attempt to\s+(\w[\w\s\-\'\.]+?)\s+(good|failed)',
+    re.IGNORECASE
+)
 RE_PUNT = re.compile(r'(\w[\w\s\-\'\.]+?)\s+punt(?:\s+(\d+)\s+yards)?', re.IGNORECASE)
 RE_KICKOFF = re.compile(r'(\w[\w\s\-\'\.]+?)\s+kickoff\s+(\d+)\s+yards', re.IGNORECASE)
 RE_FG = re.compile(
@@ -207,12 +213,31 @@ def parse_play(text: str, offense: str, defense: str) -> dict:
         _stamp_pass_flags(p)
         return p
 
+    # Alternate sack format: "QB sacked to Tackler for loss of N yards"
+    sk_alt = RE_SACK_ALT.search(text)
+    if sk_alt:
+        p['play_type'] = 'pass'
+        p['is_sack'] = True
+        p['ball_carrier'] = clean_player(sk_alt.group(1))
+        p['yards_gained'] = parse_yards(text)
+        p['tackler_1'], p['tackler_2'] = parse_tacklers(text)
+        _stamp_pass_flags(p)
+        return p
+
     # Field goal
     fg = RE_FG.search(text)
     if fg:
         p['play_type'] = 'field_goal'
         p['ball_carrier'] = clean_player(fg.group(1))
         p['fg_result'] = fg.group(3).lower()
+        return p
+
+    # Blocked field goal
+    fg_blocked = RE_FG_BLOCKED.search(text)
+    if fg_blocked:
+        p['play_type'] = 'field_goal'
+        p['ball_carrier'] = clean_player(fg_blocked.group(1))
+        p['fg_result'] = 'blocked'
         return p
 
     # PAT (kick)
@@ -289,6 +314,26 @@ def parse_play(text: str, offense: str, defense: str) -> dict:
         p['targeted_receiver'] = clean_player(pi.group(2)) if pi.group(2) else None
         p['pass_result'] = 'incomplete'
         p['yards_gained'] = 0
+        p['tackler_1'], p['tackler_2'] = parse_tacklers(text)
+        _stamp_pass_flags(p)
+        return p
+
+    # Pass attempt variant: "QB pass attempt to Receiver good/failed[/failed (intercepted)]"
+    pa = RE_PASS_ATTEMPT.search(text)
+    if pa:
+        p['play_type'] = 'pass'
+        p['ball_carrier'] = clean_player(pa.group(1))
+        receiver = pa.group(2).strip()
+        p['targeted_receiver'] = clean_player(receiver) if receiver.upper() != 'TEAM' else None
+        if pa.group(3).lower() == 'good':
+            p['pass_result'] = 'complete'
+            p['yards_gained'] = parse_yards(text)
+        elif 'intercept' in text.lower():
+            p['pass_result'] = 'int'
+            p['yards_gained'] = 0
+        else:
+            p['pass_result'] = 'incomplete'
+            p['yards_gained'] = 0
         p['tackler_1'], p['tackler_2'] = parse_tacklers(text)
         _stamp_pass_flags(p)
         return p
