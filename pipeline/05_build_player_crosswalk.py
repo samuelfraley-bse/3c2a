@@ -1,12 +1,15 @@
 """
-Build a player name crosswalk by fuzzy-matching play-by-play names against
-canonical roster names within each team's scope.
+Build a player name crosswalk by clustering name variants within each team.
+
+Approach: roster-independent intra-team clustering. For each team, collect all
+unique names from plays.csv, then fuzzy-cluster names that look like variants of
+the same person. The longest/most-complete form in each cluster becomes canonical.
 
 Usage:
     python pipeline/05_build_player_crosswalk.py --season 2025-26 [--out outputs/]
 
 Output: outputs/{season}/player_crosswalk.csv
-    team_name, pbp_name, canonical_name, match_score
+    team_name, pbp_name, canonical_name, match_score, source
 
 Review this file before running 06_apply_player_crosswalk.py.
 Rows where pbp_name == canonical_name are identity mappings (no change needed).
@@ -18,47 +21,69 @@ import difflib
 import os
 from collections import defaultdict
 
-CROSSWALK_FIELDS = ['team_name', 'pbp_name', 'canonical_name', 'match_score']
+CROSSWALK_FIELDS = ['team_name', 'pbp_name', 'canonical_name', 'match_score', 'source']
+THRESHOLD = 0.82
 
 # Columns in plays.csv that contain player names, and which team side they belong to
 PLAYER_COLUMNS = [
-    ('ball_carrier', 'offense'),
-    ('targeted_receiver', 'offense'),
+    ('passer', 'offense'),
+    ('rusher', 'offense'),
+    ('receiver', 'offense'),
     ('tackler_1', 'defense'),
     ('tackler_2', 'defense'),
-    ('penalty_player', 'offense'),
+    # penalty_player handled separately — attributed to penalty_team, not always offense
 ]
 
 
-def best_match(name: str, candidates: list[str], threshold: float = 0.82) -> tuple[str | None, float]:
-    """Return (best_candidate, score) or (None, 0) if no match above threshold."""
-    if not candidates or not name:
-        return None, 0.0
+def similarity(a: str, b: str) -> float:
+    """Fuzzy similarity between two names, boosted for prefix matches (handles truncation)."""
+    a_l, b_l = a.lower(), b.lower()
+    if a_l == b_l:
+        return 1.0
+    # Prefix match: one is a truncation of the other
+    if a_l.startswith(b_l) or b_l.startswith(a_l):
+        shorter = min(len(a), len(b))
+        longer = max(len(a), len(b))
+        return shorter / longer
+    return difflib.SequenceMatcher(None, a_l, b_l).ratio()
 
-    # Exact match
-    if name in candidates:
-        return name, 1.0
 
-    best_candidate = None
-    best_score = 0.0
+def cluster_names(names: list[str]) -> dict[str, str]:
+    """
+    Cluster name variants within a team. Returns {pbp_name: canonical_name}.
+    Canonical = longest name in the cluster (most complete form).
+    """
+    names = sorted(set(names))
+    # Union-find
+    parent = {n: n for n in names}
 
-    name_lower = name.lower()
-    for candidate in candidates:
-        # Prefix match: pbp name is a prefix of roster name (handles truncation like Kamaka→Kamakawiwo'ole)
-        if candidate.lower().startswith(name_lower) or name_lower.startswith(candidate.lower()):
-            score = len(min(name, candidate, key=len)) / len(max(name, candidate, key=len))
-            if score > best_score:
-                best_score = score
-                best_candidate = candidate
+    def find(x):
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
 
-        ratio = difflib.SequenceMatcher(None, name_lower, candidate.lower()).ratio()
-        if ratio > best_score:
-            best_score = ratio
-            best_candidate = candidate
+    def union(x, y):
+        parent[find(x)] = find(y)
 
-    if best_score >= threshold:
-        return best_candidate, round(best_score, 3)
-    return None, round(best_score, 3)
+    for i, a in enumerate(names):
+        for b in names[i + 1:]:
+            if similarity(a, b) >= THRESHOLD:
+                union(a, b)
+
+    # Group by cluster root
+    clusters: dict[str, list[str]] = defaultdict(list)
+    for name in names:
+        clusters[find(name)].append(name)
+
+    # Canonical = longest name in cluster
+    mapping = {}
+    for members in clusters.values():
+        canonical = max(members, key=len)
+        for name in members:
+            mapping[name] = canonical
+
+    return mapping
 
 
 def main():
@@ -68,17 +93,8 @@ def main():
     args = parser.parse_args()
 
     out_dir = os.path.join(args.out, args.season)
-    rosters_path = os.path.join(out_dir, 'rosters.csv')
     plays_path = os.path.join(out_dir, 'plays.csv')
     crosswalk_path = os.path.join(out_dir, 'player_crosswalk.csv')
-
-    # Load roster: {team_name: [canonical_names]}
-    roster = defaultdict(list)
-    with open(rosters_path, newline='', encoding='utf-8') as f:
-        for row in csv.DictReader(f):
-            roster[row['team_name']].append(row['player_name'])
-
-    print(f'Loaded rosters for {len(roster)} teams')
 
     # Collect unique (team, pbp_name) pairs from plays.csv
     pbp_names: dict[str, set[str]] = defaultdict(set)
@@ -89,6 +105,21 @@ def main():
                 team = row.get(side, '').strip()
                 if name and team:
                     pbp_names[team].add(name)
+            # penalty_player: attribute to the team that committed the penalty
+            pen_name = row.get('penalty_player', '').strip()
+            pen_team_token = row.get('penalty_team', '').strip().upper()
+            offense = row.get('offense', '').strip()
+            defense = row.get('defense', '').strip()
+            if pen_name and pen_team_token:
+                # penalty_team is an uppercase token (e.g. "CERRITOS", "MT. SAN")
+                # match it against offense/defense by checking if token appears in team name
+                def _tok_match(tok, team):
+                    return tok in team.upper().replace(' ', '').replace('.', '') or \
+                           team.upper().replace(' ', '').replace('.', '') in tok
+                if _tok_match(pen_team_token.replace(' ', '').replace('.', ''), offense):
+                    pbp_names[offense].add(pen_name)
+                elif defense and _tok_match(pen_team_token.replace(' ', '').replace('.', ''), defense):
+                    pbp_names[defense].add(pen_name)
 
     print(f'Found player names across {len(pbp_names)} teams in plays.csv')
 
@@ -96,15 +127,10 @@ def main():
     total_remapped = 0
 
     for team in sorted(pbp_names):
-        candidates = roster.get(team, [])
-        if not candidates:
-            continue
-
+        mapping = cluster_names(list(pbp_names[team]))
         for pbp_name in sorted(pbp_names[team]):
-            canonical, score = best_match(pbp_name, candidates)
-            if canonical is None:
-                canonical = pbp_name  # identity — no match found
-                score = 0.0
+            canonical = mapping[pbp_name]
+            score = round(similarity(pbp_name, canonical), 3) if canonical != pbp_name else 1.0
             if canonical != pbp_name:
                 total_remapped += 1
             crosswalk_rows.append({
@@ -112,6 +138,7 @@ def main():
                 'pbp_name': pbp_name,
                 'canonical_name': canonical,
                 'match_score': score,
+                'source': 'identity' if canonical == pbp_name else 'intra-team',
             })
 
     with open(crosswalk_path, 'w', newline='', encoding='utf-8') as f:
@@ -121,14 +148,13 @@ def main():
 
     print(f'Wrote {len(crosswalk_rows)} entries ({total_remapped} remapped) → {crosswalk_path}')
 
-    # Print the remapped entries for review
     remapped = [r for r in crosswalk_rows if r['pbp_name'] != r['canonical_name']]
     if remapped:
         print(f'\nRemapped entries (review before applying):')
-        for r in remapped[:40]:
-            print(f"  {r['team_name']:<22} {r['pbp_name']:<28} → {r['canonical_name']:<28} ({r['match_score']})")
-        if len(remapped) > 40:
-            print(f'  ... and {len(remapped)-40} more (see {crosswalk_path})')
+        for r in remapped[:50]:
+            print(f"  {r['team_name']:<22} {r['pbp_name']:<30} → {r['canonical_name']}")
+        if len(remapped) > 50:
+            print(f'  ... and {len(remapped)-50} more (see {crosswalk_path})')
 
 
 if __name__ == '__main__':

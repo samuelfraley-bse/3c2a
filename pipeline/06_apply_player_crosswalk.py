@@ -41,12 +41,26 @@ def main():
         offense = row.get('offense', '')
         defense = row.get('defense', '')
 
-        for col, side in [('ball_carrier', offense), ('targeted_receiver', offense),
-                          ('penalty_player', offense), ('tackler_1', defense), ('tackler_2', defense)]:
+        for col, side in [('passer', offense), ('rusher', offense), ('receiver', offense),
+                          ('tackler_1', defense), ('tackler_2', defense)]:
             name = row.get(col, '')
             if name and (side, name) in crosswalk:
                 row[col] = crosswalk[(side, name)]
                 changes += 1
+
+        # penalty_player: look up against the team that committed the penalty
+        pen_name = row.get('penalty_player', '')
+        pen_team_token = row.get('penalty_team', '').upper().replace(' ', '').replace('.', '')
+        if pen_name and pen_team_token:
+            for team in [offense, defense]:
+                if not team:
+                    continue
+                tok = team.upper().replace(' ', '').replace('.', '')
+                if pen_team_token in tok or tok in pen_team_token:
+                    if (team, pen_name) in crosswalk:
+                        row['penalty_player'] = crosswalk[(team, pen_name)]
+                        changes += 1
+                    break
 
     with open(plays_path, 'w', newline='', encoding='utf-8') as f:
         w = csv.DictWriter(f, fieldnames=fieldnames)
