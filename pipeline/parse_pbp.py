@@ -73,7 +73,7 @@ RE_FUMBLE = re.compile(
     re.IGNORECASE
 )
 RE_FIELD_POS = re.compile(r'^([A-Z][A-Z0-9\s\.\-\_]*?)(\d+)$')
-RE_TACKLERS = re.compile(r'\(([^)]+)\)\s*\.?\s*$')
+RE_TACKLERS = re.compile(r'\(([^()]+)\)\s*\.?\s*$')
 
 
 def normalize_team(name: str) -> str:

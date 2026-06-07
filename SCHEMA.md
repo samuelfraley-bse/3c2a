@@ -167,10 +167,24 @@ QB scrambles (QB tucks and runs) appear as `play_type='rush'` in the PBP text an
 
 ---
 
+## Player name sources
+
+Two complementary sources are used for player identity:
+
+| Source | File | Used for |
+|---|---|---|
+| Game participation pages (`?view=participation`) | `participation.csv` | Primary canonical name source; covers all teams including those with no roster page. Includes players who dressed but are not listed on the official website roster (walk-ons, late additions). |
+| Team roster pages | `players.csv` | Position (`pos`), height, weight, hometown. Not used as the primary name source — roster pages are incomplete for some teams (403 errors, JS-rendered) and miss players not officially listed. |
+
+`participation.csv` contains both participants (`participated=true`) and did-not-play players (`participated=false`). Note that DNP player names may be truncated in the source HTML.
+
+---
+
 ## Join keys
 
 ```
 standings.team_name  <->  schedule.team_name
 schedule.game_id     <->  games.game_id
 games.game_id        <->  plays.game_id
+games.game_id        <->  participation.game_id
 ```
