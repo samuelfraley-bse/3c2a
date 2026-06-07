@@ -5,10 +5,24 @@ Scrapes 3C2A football data from `3c2asports.org` into per-season CSVs with enric
 ## Pipeline Overview
 
 ```
-Step 1 — pipeline/01_scrape_season.py          → standings, schedule, games, plays
-Step 2 — pipeline/02_generate_crosswalk_draft.py → prefix_crosswalk_draft.csv
-Step 3 — [fill crosswalk manually/Claude]      → prefix_crosswalk.csv
-Step 4 — pipeline/01_scrape_season.py --crosswalk → plays.csv (enriched)
+── Data collection ──────────────────────────────────────────────────────
+01_scrape_season.py          → standings, schedule, games, plays.csv
+02_scrape_participation.py   → participation.csv  (per-game player lists)
+03_scrape_rosters.py         → players.csv        (positions, hometowns)
+
+── Field position crosswalk ─────────────────────────────────────────────
+04_generate_field_pos_crosswalk.py → prefix_crosswalk_draft.csv
+[fill crosswalk manually/LLM]      → prefix_crosswalk.csv
+01_scrape_season.py --crosswalk    → plays.csv (enriched field position)
+
+── Validation ───────────────────────────────────────────────────────────
+05_check_season.py           → spot-check team totals vs box scores
+
+── Player name normalization ────────────────────────────────────────────
+06_export_pbp_names.py       → pbp_names.csv  (unique PBP names to fill)
+07_match_pbp_names.py        → pbp_names.csv  (auto-fill from participation)
+[LLM review of unresolved rows]
+08_apply_player_crosswalk.py → plays.csv      (canonical names applied)
 ```
 
 All scripts are run from the repo root.
@@ -231,9 +245,16 @@ python pipeline/01_scrape_season.py --season 2024-25 --plays-only --manual-dir m
 
 | Script | Purpose |
 |---|---|
-| `pipeline/01_scrape_season.py` | Steps 1 + 4; rescrape specific games |
-| `pipeline/02_generate_crosswalk_draft.py` | Step 2 |
-| `pipeline/parse_pbp.py` | Internal — HTML → play rows, used by scraper |
+| `pipeline/01_scrape_season.py` | Scrape season; rescrape specific games with crosswalk |
+| `pipeline/02_scrape_participation.py` | Scrape per-game participation + DNP lists |
+| `pipeline/03_scrape_rosters.py` | Scrape team roster pages (positions, hometowns) |
+| `pipeline/04_generate_field_pos_crosswalk.py` | Generate field position prefix crosswalk draft |
+| `pipeline/05_check_season.py` | Validate team totals vs official box scores |
+| `pipeline/06_export_pbp_names.py` | Export unique PBP player names for normalization |
+| `pipeline/07_match_pbp_names.py` | Auto-fill canonical names from participation data |
+| `pipeline/08_apply_player_crosswalk.py` | Apply canonical names to plays.csv |
+| `pipeline/find_prestosports_rosters.py` | Utility — probe and verify roster URLs |
+| `pipeline/parse_pbp.py` | Internal — HTML → play rows, used by 01 |
 | `analysis/` | Season report tables (see ANALYSIS.md) |
 
 ---

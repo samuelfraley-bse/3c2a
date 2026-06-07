@@ -15,6 +15,8 @@ This document describes the complete scraping and data pipeline for the Foothill
 - Standings: `https://3c2asports.org/sports/fball/{season}/standings`
 - Team Schedule: `https://3c2asports.org/sports/fball/{season}/schedule?teamId={team_id}`
 - Play-by-Play: `https://3c2asports.org/sports/fball/{season}/boxscores/{game_id}.xml?view=plays`
+- Participation: `https://3c2asports.org/sports/fball/{season}/boxscores/{game_id}.xml?view=participation`
+- Team Roster: varies by team (PrestoSports subdomain, path `roster` or `sports/fball/{season}/roster`)
 
 Game IDs follow the format `YYYYMMDD_slug` (e.g. `20251025_ligd`).
 
@@ -69,7 +71,25 @@ HTML targets:
   - `td[0]`: Situation ("1st and 10 at FIELDPOS")
   - `td[1]`: Play description text
 
-### Stage 3 — Build Field Position Crosswalk
+### Stage 3 — Scrape Participation (`pipeline/02_scrape_participation.py`)
+
+**Participation page (per game) → `outputs/{season}/participation.csv`**
+
+URL pattern: same as PBP but `?view=participation` instead of `?view=plays`.
+
+HTML structure: one outer table with two nested player tables (one per team). Each row is `jersey | player_name`. Both the participated and did-not-participate sections are captured with a `participated` boolean column.
+
+Supports resume after interruption — already-scraped game IDs are skipped on re-run. Rate-limit codes 429 and 459 are retried with exponential backoff.
+
+### Stage 4 — Scrape Rosters (`pipeline/03_scrape_rosters.py`)
+
+**Team roster page (per team) → `outputs/{season}/players.csv`**
+
+Scrapes official PrestoSports team roster pages for `pos`, `height`, `weight`, `hometown`. Used as a supplementary source for position data after canonical names are resolved from participation data.
+
+Note: some teams return 403 or use JS-rendered pages — these are skipped. Players who dress but are not on the official roster page (walk-ons, late additions) are covered by participation data instead.
+
+### Stage 5 — Build Field Position Crosswalk (`pipeline/04_generate_field_pos_crosswalk.py`)
 
 PrestoSports uses game-specific field position prefixes (e.g. `FOOTHILL28`, `MT SANxx`). The same abbreviation can refer to different teams across games, so a per-game crosswalk is required.
 
@@ -84,11 +104,27 @@ Resolution algorithm:
 2. Fuzzy substring match: prefix is substring of team name
 3. Mark unresolved for manual review
 
-### Stage 4 — Re-parse with Crosswalk (Optional)
+### Stage 6 — Re-parse with Crosswalk (Optional)
 
 Re-scrape or re-parse affected games using `--game-ids` flag. The crosswalk resolves:
 - `field_pos_side`: `'own'` if owner == offense else `'opponent'`
 - `yardline_100`: `100 - yardline_raw` if own side, else `yardline_raw`
+
+### Stage 7 — Player Name Normalization
+
+PBP text uses inconsistent name spellings across games (truncations, typos, suffixes). Three steps normalize names to a single canonical form per player per team.
+
+**Export unique names (`pipeline/06_export_pbp_names.py`) → `outputs/{season}/pbp_names.csv`**
+
+Extracts all unique `(team, role, pbp_name)` combinations from plays.csv. Role is one of `passer`, `rusher`, `receiver`, `defender`. Teams with no participation data are flagged `no_roster`.
+
+**Auto-match (`pipeline/07_match_pbp_names.py`) → updates `pbp_names.csv`**
+
+Fuzzy-matches each PBP name against participation.csv names for the same team. Uses prefix matching, spelling similarity, suffix handling, and nickname equivalence. Unresolved rows are flagged for LLM review. Position is looked up from players.csv after a match is found.
+
+**Apply crosswalk (`pipeline/08_apply_player_crosswalk.py`) → updates `plays.csv` in-place**
+
+Replaces `passer`, `rusher`, `receiver`, `tackler_1`, `tackler_2`, and `penalty_player` columns with canonical names from `pbp_names.csv`.
 
 ---
 
@@ -136,7 +172,7 @@ Re-scrape or re-parse affected games using `--game-ids` flag. The crosswalk reso
 | Penalty | `PENALTY\s+([A-Z\s]+)\s+([a-z][\w\s]*?)\s*\(([^)]+)\)\s+(\d+)` | team, type, player, yards |
 | Yardage | `for\s+(loss of\s+)?(\d+)\s+yards?` | signed integer |
 | Touchdown | Contains literal "touchdown" | boolean |
-| Tacklers | Trailing parenthetical `\(([^)]+)\)` | semicolon-separated names |
+| Tacklers | Trailing parenthetical `\(([^()]+)\)` | semicolon-separated names |
 
 **Drive header:**
 - Pattern: `^(.+?)\s+at\s+(\d+:\d+)$`
@@ -209,7 +245,7 @@ All outputs land in `outputs/{season}/`.
 
 **Field position:** `field_position, yardline_raw, field_pos_side, yardline_100, offense, defense`
 
-**Play type & actors:** `play_type, ball_carrier, targeted_receiver, pass_result`
+**Play type & actors:** `play_type, passer, rusher, receiver, pass_result`
 
 **Outcome:** `yards_gained, is_td, is_sack, is_fumble, fumble_recovered_by, fg_result`
 
@@ -218,6 +254,19 @@ All outputs land in `outputs/{season}/`.
 **Defense:** `tackler_1, tackler_2`
 
 **Raw:** `raw_text`
+
+### `participation.csv`
+~40,000–50,000 rows (347 games × ~2 teams × ~50–110 players): `game_id, team_name, jersey, player_name, participated`
+
+`participated=true` for players who dressed and played; `participated=false` for did-not-play. Note: DNP player names may be truncated in the source HTML.
+
+### `players.csv`
+~2,000–3,000 rows (teams with accessible roster pages only): `season, team_name, player_id, jersey, player_name, pos, height, weight, hometown, headshot_url`
+
+### `pbp_names.csv`
+~4,700 rows: `team, role, pbp_name, canonical_name, position, flagged, review_flag`
+
+Output of `06_export_pbp_names.py`; filled by `07_match_pbp_names.py` and LLM review.
 
 ### `prefix_crosswalk_draft.csv` / `prefix_crosswalk.csv`
 ~650 rows: `game_id, prefix_a, prefix_b, canonical_a, canonical_b, team_1, team_2, note`
@@ -246,8 +295,9 @@ yardline_100:      70
 offense:           Foothill
 defense:           San Mateo
 play_type:         pass
-ball_carrier:      John Larios
-targeted_receiver: NULL
+passer:            John Larios
+rusher:            NULL
+receiver:          NULL
 pass_result:       incomplete
 yards_gained:      -7
 is_td:             False
