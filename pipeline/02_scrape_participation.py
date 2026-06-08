@@ -23,6 +23,7 @@ FIELDS = ['game_id', 'team_name', 'jersey', 'player_name', 'participated']
 
 
 RATE_LIMIT_CODES = {429, 459}
+SERVER_ERROR_CODES = {500, 502, 503, 504, 520, 521, 522, 524}
 
 
 def fetch(url: str, delay: float, session: requests.Session, retries: int = 8) -> str | None:
@@ -34,6 +35,11 @@ def fetch(url: str, delay: float, session: requests.Session, retries: int = 8) -
                 wait = 120 * (2 ** attempt)
                 reason = f'{r.status_code} rate limited' if r.status_code in RATE_LIMIT_CODES else f'{r.status_code} empty'
                 print(f'  [{reason}] waiting {wait}s then retrying ({attempt+1}/{retries})')
+                time.sleep(wait)
+                continue
+            if r.status_code in SERVER_ERROR_CODES:
+                wait = 30 * (2 ** attempt)
+                print(f'  [{r.status_code} server error] waiting {wait}s then retrying ({attempt+1}/{retries})')
                 time.sleep(wait)
                 continue
             r.raise_for_status()
