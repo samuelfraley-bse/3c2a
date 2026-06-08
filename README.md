@@ -255,6 +255,7 @@ python pipeline/01_scrape_season.py --season 2024-25 --plays-only --manual-dir m
 | `pipeline/07_match_pbp_names.py` | Auto-fill canonical names from participation data |
 | `pipeline/08_apply_player_crosswalk.py` | Apply canonical names to plays.csv |
 | `pipeline/10_scrape_lineup.py` | Scrape canonical player names + stable player slugs from season stats pages |
+| `pipeline/reclean_plays.py` | Re-parse player name columns from raw_text without re-scraping (for parser fixes) |
 | `pipeline/find_prestosports_rosters.py` | Utility — probe and verify roster URLs |
 | `pipeline/parse_pbp.py` | Internal — HTML → play rows, used by 01 |
 | `analysis/` | Season report tables (see ANALYSIS.md) |
@@ -329,6 +330,25 @@ Coverage is limited to players with recorded stats in that position group — pl
 | Stable player ID / profile URL | `lineup.csv` from `10_scrape_lineup.py` |
 | All players who dressed for a game | `participation.csv` |
 | Players with recorded stats | `lineup.csv` |
+
+---
+
+## Data Quality and Known Gaps
+
+### Missing PBP games
+12 games in 2025-26 have no play-by-play (`failed_games.txt`). Most involve Hartnell and Gavilan, who appear not to publish PBP. Players on those teams have incomplete season totals; any opponent also loses one game of data. When building season leaderboards, join against a `games_with_pbp` count per team so readers know coverage.
+
+### Name format variants
+Some PrestoSports scorers write `Last,First` instead of `First Last`. In 2025-26 all known cases involve Desert College. The parser normalises this automatically; `reclean_plays.py` can patch existing data without re-scraping.
+
+### Player name coverage
+84% of unique PBP player names were matched to a canonical participation name. The remaining 16% are players absent from all participation pages — they aggregate correctly under their PBP spelling but won't join to roster data (position, hometown). When validating season totals against official stats, gaps of ~2% on individual players are expected from minor parsing edge cases; larger gaps indicate a missing game.
+
+### Validated accuracy (2025-26 passing leaders)
+Cross-checked top 20 passers against official 3C2A stats:
+- **Exact match**: Faker/Sequoias (3493), McLeod/Diablo Valley (3022), Spicer IV/Grossmont (2938), Kirby/De Anza (2759), Leon/Ventura (2638), Calvin/Cerritos (2599), Delzeit/Coalinga (2593), and 6 others
+- **Gap explained by missing game**: Crawford/Los Medanos (-315, game `20250913_cupn` in failed_games.txt)
+- **Gap from parsing edge cases**: Clark-James/San Francisco (-81, ~3%)
 
 ---
 

@@ -71,6 +71,10 @@ HTML targets:
   - `td[0]`: Situation ("1st and 10 at FIELDPOS")
   - `td[1]`: Play description text
 
+**Name format normalization:** Some PrestoSports scorers write player names as `Last,First` instead of `First Last`. `parse_play()` detects and normalises this before applying any regex. All known cases involve Desert College as a participant. To patch existing plays.csv rows without re-scraping, use `pipeline/reclean_plays.py`.
+
+**Missing PBP games:** Games that return 0 plays are written to `outputs/{season}/failed_games.txt` and skipped on resume. For 2025-26, 12 games have no PBP — primarily Hartnell and Gavilan home games. Players on those teams will have incomplete season totals; players who faced them will be missing one game of data.
+
 ### Stage 3 — Scrape Participation (`pipeline/02_scrape_participation.py`)
 
 **Participation page (per game) → `outputs/{season}/participation.csv`**
@@ -146,7 +150,14 @@ Extracts all unique `(team, role, pbp_name)` combinations from plays.csv. Role i
 
 **Auto-match (`pipeline/07_match_pbp_names.py`) → updates `pbp_names.csv`**
 
-Fuzzy-matches each PBP name against participation.csv names for the same team. Uses prefix matching, spelling similarity, suffix handling, and nickname equivalence. Unresolved rows are flagged for LLM review. Position is looked up from players.csv after a match is found.
+Fuzzy-matches each PBP name against participation.csv names for the same team. Uses prefix matching, spelling similarity, suffix handling, and nickname equivalence. Position is looked up from players.csv after a match is found.
+
+Additional disambiguation steps applied in order:
+1. **Participation dedup**: near-duplicate spellings of the same player across games (e.g. `Isaiah Hernandez` vs `Isaiah Hernande`) are collapsed to the longest form before matching, preventing false ambiguity.
+2. **Role-aware pick**: when two candidates remain, the player's role (`passer/rusher/receiver/defender`) is matched against position data from players.csv to select the correct candidate.
+3. **Longest-name tiebreaker**: when no position data is available, the most complete name wins.
+
+For 2025-26: 84% of unique PBP names resolved to canonical participation names. Remaining 16% (`no_match`) are players absent from all participation pages — their PBP name is used as-is and aggregates consistently.
 
 **Apply crosswalk (`pipeline/08_apply_player_crosswalk.py`) → updates `plays.csv` in-place**
 
