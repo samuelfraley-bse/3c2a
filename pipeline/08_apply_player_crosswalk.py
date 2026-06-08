@@ -20,15 +20,20 @@ def main():
     args = parser.parse_args()
 
     out_dir = os.path.join(args.out, args.season)
-    crosswalk_path = os.path.join(out_dir, 'player_crosswalk.csv')
+    crosswalk_path = os.path.join(out_dir, 'pbp_names.csv')
     plays_path = os.path.join(out_dir, 'plays.csv')
 
-    # Load crosswalk: {(team_name, pbp_name): canonical_name} — only entries that actually change
+    # Load crosswalk: {(team, pbp_name): canonical_name} — only resolved entries that differ
     crosswalk: dict[tuple[str, str], str] = {}
     with open(crosswalk_path, newline='', encoding='utf-8') as f:
         for row in csv.DictReader(f):
-            if row['pbp_name'] != row['canonical_name']:
-                crosswalk[(row['team_name'], row['pbp_name'])] = row['canonical_name']
+            if row.get('flagged') in ('no_match', 'ambiguous', 'ambiguous_unresolvable', 'no_roster'):
+                continue
+            canonical = row.get('canonical_name', '').strip()
+            pbp = row.get('pbp_name', '').strip()
+            team = row.get('team', '').strip()
+            if canonical and pbp and canonical != pbp:
+                crosswalk[(team, pbp)] = canonical
 
     print(f'Loaded {len(crosswalk)} name remappings')
 
@@ -67,7 +72,7 @@ def main():
         w.writeheader()
         w.writerows(rows)
 
-    print(f'Applied {changes} name changes across {len(rows)} plays → {plays_path}')
+    print(f'Applied {changes} name changes across {len(rows)} plays -> {plays_path}')
 
 
 if __name__ == '__main__':
