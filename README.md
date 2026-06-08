@@ -18,7 +18,8 @@ Scrapes 3C2A football data from `3c2asports.org` into per-season CSVs with enric
 ── Validation ───────────────────────────────────────────────────────────
 05_check_season.py           → spot-check team totals vs box scores
 
-── Player name normalization ────────────────────────────────────────────
+── Player name canonicalization ─────────────────────────────────────────
+10_scrape_lineup.py          → lineup.csv     (canonical names + player slugs)
 06_export_pbp_names.py       → pbp_names.csv  (unique PBP names to fill)
 07_match_pbp_names.py        → pbp_names.csv  (auto-fill from participation)
 [LLM review of unresolved rows]
@@ -253,6 +254,7 @@ python pipeline/01_scrape_season.py --season 2024-25 --plays-only --manual-dir m
 | `pipeline/06_export_pbp_names.py` | Export unique PBP player names for normalization |
 | `pipeline/07_match_pbp_names.py` | Auto-fill canonical names from participation data |
 | `pipeline/08_apply_player_crosswalk.py` | Apply canonical names to plays.csv |
+| `pipeline/10_scrape_lineup.py` | Scrape canonical player names + stable player slugs from season stats pages |
 | `pipeline/find_prestosports_rosters.py` | Utility — probe and verify roster URLs |
 | `pipeline/parse_pbp.py` | Internal — HTML → play rows, used by 01 |
 | `analysis/` | Season report tables (see ANALYSIS.md) |
@@ -288,6 +290,45 @@ Filled in Step 3. Same structure with `canonical_a` / `canonical_b` completed �
 
 ### `failed_games.txt`
 One game ID per line. Written when a game returns 0 plays. Safe to leave permanently for games with no PBP page.
+
+---
+
+## Player Name Sources
+
+Two scrapers collect player identity data, and they serve different purposes:
+
+### `02_scrape_participation.py` — who played in each game
+
+```powershell
+python pipeline/02_scrape_participation.py --season 2025-26 --delay 8
+```
+
+Scrapes `?view=participation` for every game. Produces `participation.csv` with every player who dressed (participated) or was listed as a DNP, per game. This is the **primary source for name canonicalization** because:
+- It covers 100% of teams, including those with no accessible roster page.
+- It captures walk-ons and late additions who never appear on the official website roster.
+- Names are from the same PrestoSports database that drives the PBP text.
+
+`07_match_pbp_names.py` uses participation as its matching pool — for each PBP name it fuzzy-matches against the set of players who appeared in any game for that team.
+
+### `10_scrape_lineup.py` — canonical names + stable player IDs
+
+```powershell
+python pipeline/10_scrape_lineup.py --season 2025-26
+```
+
+Scrapes the non-JS per-position stats pages (`?view=season&pos=qb` etc.) for each team. Produces `lineup.csv` with the canonical player name as PrestoSports stores it **and** the player slug, which encodes a stable opaque player ID (e.g. `drakemissamore7nfq`). This is the **source for player slugs** when you need to join across seasons or look up a player profile URL.
+
+Coverage is limited to players with recorded stats in that position group — players who dressed but had no stats will appear in participation but not lineup.
+
+### How they complement each other
+
+| Need | Use |
+|---|---|
+| Canonical name to match against PBP | `participation.csv` (primary) |
+| Position, height, weight, hometown | `players.csv` from `03_scrape_rosters.py` |
+| Stable player ID / profile URL | `lineup.csv` from `10_scrape_lineup.py` |
+| All players who dressed for a game | `participation.csv` |
+| Players with recorded stats | `lineup.csv` |
 
 ---
 

@@ -110,6 +110,32 @@ Re-scrape or re-parse affected games using `--game-ids` flag. The crosswalk reso
 - `field_pos_side`: `'own'` if owner == offense else `'opponent'`
 - `yardline_100`: `100 - yardline_raw` if own side, else `yardline_raw`
 
+### Stage 6b — Scrape Lineup for Player Slugs (`pipeline/10_scrape_lineup.py`)
+
+**Team season stats pages (7 per team) → `outputs/{season}/lineup.csv`**
+
+URL pattern: `cccaa.prestosports.com/sports/fball/{season}/teams/{team_slug}?view=season&pos={pos}` where pos ∈ `{qb, rb, wr, d, k, p, kr}`.
+
+These are static (non-JS) pages — unlike the main lineup tab which DataTables-paginates to 25 rows, the position-filtered pages return the full list.
+
+HTML target: `a[href*="/players/"]` — each link's text is the canonical name; the href slug encodes a stable opaque player ID.
+
+Team slugs are extracted from `manual/print-teams-dec-printer-decorator.html` (save the printer-decorator URL from the teams page: `?dec=printer-decorator`).
+
+Output columns: `team_name, team_slug, player_name, player_slug, pos_group`
+
+`player_slug` (e.g. `drakemissamore7nfq`) contains the player ID embedded after the normalized name portion. This slug is stable across seasons and builds the profile URL: `3c2asports.org/sports/fball/{season}/players/{slug}`.
+
+**This stage is complementary to participation scraping, not a replacement:**
+
+| Source | Coverage | Has player slug | Has position | Used for |
+|---|---|---|---|---|
+| `participation.csv` | All players who dressed, every game | No | No | Name canonicalization (primary) |
+| `lineup.csv` | Players with stats in their pos group | Yes | Inferred from pos_group | Cross-season player linking |
+| `players.csv` | Teams with accessible roster pages only | No | Yes | Position, height, weight, hometown |
+
+Rate limiting: this scraper defaults to 15s inter-request delay plus 45s between teams, with user-agent rotation. 490 total requests (~3.5 hours). Supports resume.
+
 ### Stage 7 — Player Name Normalization
 
 PBP text uses inconsistent name spellings across games (truncations, typos, suffixes). Three steps normalize names to a single canonical form per player per team.
@@ -262,6 +288,11 @@ All outputs land in `outputs/{season}/`.
 
 ### `players.csv`
 ~2,000–3,000 rows (teams with accessible roster pages only): `season, team_name, player_id, jersey, player_name, pos, height, weight, hometown, headshot_url`
+
+### `lineup.csv`
+~2,000–4,000 rows (70 teams × 7 position groups, deduplicated): `team_name, team_slug, player_name, player_slug, pos_group`
+
+Players appear once per position group in which they have recorded stats. A player can appear in multiple pos_group rows (e.g. a receiver who also returns kicks appears under both `wr` and `kr`).
 
 ### `pbp_names.csv`
 ~4,700 rows: `team, role, pbp_name, canonical_name, position, flagged, review_flag`
