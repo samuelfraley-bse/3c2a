@@ -248,6 +248,47 @@ def dedup_participation(entries: list[dict[str, object]]) -> list[dict[str, obje
     return result
 
 
+# Positions consistent with each PBP role
+ROLE_POSITIONS: dict[str, set[str]] = {
+    "passer":   {"QB"},
+    "rusher":   {"QB", "RB", "FB", "WB", "HB", "WR", "TE", "K", "P"},  # K/P cover kickoffs/punts
+    "receiver": {"WR", "TE", "H", "HB", "FB", "SB", "SE"},
+    "defender": {"DB", "LB", "DL", "DE", "NT", "EDGE", "CB", "S", "FS", "SS", "NB", "ILB", "OLB"},
+}
+
+
+def role_pick(candidates: list[Candidate], role: str, pos_lookup: dict[tuple[str, str], str], team: str) -> Candidate | None:
+    """Return the single best candidate using role-position affinity, or None if ambiguous."""
+    # Expand compound roles like 'receiver/rusher'
+    role_parts = set(role.split("/"))
+    allowed: set[str] = set()
+    for part in role_parts:
+        allowed |= ROLE_POSITIONS.get(part, set())
+
+    if not allowed:
+        return None
+
+    def pos_score(c: Candidate) -> int:
+        pos = pos_lookup.get((team, c.player_name), "").upper()
+        if not pos:
+            return 0
+        # Check any slash-separated positions in the stored value
+        for p in re.split(r"[/\s]+", pos):
+            if p in allowed:
+                return 2  # strong match
+        return -1  # incompatible position
+
+    scored = [(pos_score(c), c) for c in candidates]
+    best_score = max(s for s, _ in scored)
+    if best_score <= 0:
+        # No position info to discriminate — fall back to longest name as tiebreaker
+        longest = max(candidates, key=lambda c: len(c.player_name))
+        all_same_len = all(len(c.player_name) == len(longest.player_name) for c in candidates)
+        return None if all_same_len else longest
+    winners = [c for s, c in scored if s == best_score]
+    return winners[0] if len(winners) == 1 else None
+
+
 def find_candidates(pbp_name: str, roster: list[dict[str, object]]) -> list[Candidate]:
     name_tokens = tokenize_name(pbp_name)
     candidates: dict[tuple[str, str], Candidate] = {}
@@ -342,6 +383,14 @@ def main() -> None:
 
         row["canonical_name"] = row["pbp_name"]
         if len(candidates) > 1:
+            picked = role_pick(candidates, row.get("role", ""), pos_lookup, row["team"])
+            if picked:
+                row["canonical_name"] = picked.player_name
+                row["position"] = pos_lookup.get((row["team"], picked.player_name), "")
+                row["flagged"] = ""
+                row["review_flag"] = ""
+                stats["matched_role_pick"] += 1
+                continue
             row["position"] = "/".join(dict.fromkeys(
                 pos_lookup.get((row["team"], c.player_name), "") for c in candidates
             ))
