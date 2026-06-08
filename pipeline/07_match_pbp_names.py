@@ -202,6 +202,52 @@ def last_name_initial_match(name_tokens: list[str], player: dict[str, object]) -
     )
 
 
+def dedup_participation(entries: list[dict[str, object]]) -> list[dict[str, object]]:
+    """Collapse near-duplicate spellings of the same player within a team's participation pool.
+
+    PrestoSports lists the same player under slightly different spellings across games
+    (e.g. 'Isaiah Hernandez' in one game, 'Isaiah Hernande' in another). Both end up in
+    the pool and both match the same PBP name, causing false ambiguity.
+
+    Groups entries by (first_initial, normalized_last) and keeps the longest name in each
+    group, discarding shorter variants that are prefixes of the longest.
+    """
+    from collections import defaultdict as _dd
+
+    # Group by first initial + first 6 chars of last name (catches truncated variants)
+    groups: dict[tuple[str, str], list[dict[str, object]]] = _dd(list)
+    for entry in entries:
+        first = entry["first"][:1] if entry["first"] else ""
+        last_key = entry["last"][:6] if entry["last"] else ""
+        groups[(first, last_key)].append(entry)
+
+    result = []
+    for (first_initial, last), group in groups.items():
+        if len(group) == 1:
+            result.append(group[0])
+            continue
+
+        # Sort longest name first
+        group_sorted = sorted(group, key=lambda e: len(e["player_name"]), reverse=True)
+        longest = group_sorted[0]
+
+        # Keep an entry only if it is NOT a prefix of any longer entry in the group
+        kept = [longest]
+        for entry in group_sorted[1:]:
+            name = entry["player_name"]
+            is_prefix_of_longer = any(
+                other["player_name"].startswith(name) and other["player_name"] != name
+                for other in kept
+            )
+            if not is_prefix_of_longer:
+                # Different enough — keep (e.g. two players with same last name, same initial)
+                kept.append(entry)
+
+        result.extend(kept)
+
+    return result
+
+
 def find_candidates(pbp_name: str, roster: list[dict[str, object]]) -> list[Candidate]:
     name_tokens = tokenize_name(pbp_name)
     candidates: dict[tuple[str, str], Candidate] = {}
@@ -255,6 +301,14 @@ def main() -> None:
             if name not in seen_participation[team]:
                 seen_participation[team].add(name)
                 participation_by_team[team].append(build_player_entry(name))
+
+    # Collapse near-duplicate spellings within each team's participation pool
+    for team in participation_by_team:
+        before = len(participation_by_team[team])
+        participation_by_team[team] = dedup_participation(participation_by_team[team])
+        after = len(participation_by_team[team])
+        if before != after:
+            pass  # collapsed before - after duplicates
 
     # Supplementary: players.csv — position lookup by (team, canonical_name)
     pos_lookup: dict[tuple[str, str], str] = {}
