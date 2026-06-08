@@ -124,10 +124,21 @@ def parse_yards(text: str):
 
 
 def clean_player(name: str | None) -> str | None:
-    """Return None for TEAM placeholders or empty strings."""
+    """Return None for TEAM placeholders or empty strings.
+    Normalises Last,First format (used by some scorers) to First Last.
+    """
     if not name:
         return None
-    return None if name.strip().upper() == 'TEAM' else name.strip()
+    name = name.strip()
+    if name.upper() == 'TEAM':
+        return None
+    # Detect "Last,First" or "Last-Hyphen,First" — single comma, no spaces around it
+    if ',' in name and ' ' not in name.split(',')[0]:
+        parts = name.split(',', 1)
+        last, first = parts[0].strip(), parts[1].strip()
+        if first:
+            return f'{first} {last}'
+    return name
 
 
 def parse_tacklers(text: str):
@@ -149,8 +160,17 @@ def _stamp_pass_flags(p: dict) -> None:
     p['is_interception'] = p['pass_result'] == 'int'
 
 
+RE_LASTFIRST_TOKEN = re.compile(r'\b([A-Z][a-zA-Z\-\']+),([A-Z][a-zA-Z\-\']+)\b')
+
+
+def normalize_lastfirst(text: str) -> str:
+    """Convert Last,First tokens to First Last (used by some PrestoSports scorers)."""
+    return RE_LASTFIRST_TOKEN.sub(lambda m: f'{m.group(2)} {m.group(1)}', text)
+
+
 def parse_play(text: str, offense: str, defense: str) -> dict:
     """Extract structured fields from a single play description string."""
+    text = normalize_lastfirst(text)
     p = {
         'play_type': None,
         'passer': None,
