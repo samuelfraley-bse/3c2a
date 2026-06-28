@@ -125,3 +125,22 @@ uv run --active python -m unittest discover tests
 - Tested enrichment materialization for the 10-game sample:
   - `1638` derived field-position rows written
   - unresolved rows remained high because only one game had been manually resolved, which is expected for the current validation state
+
+### Review queue breadcrumb
+- Updated the field-position review flow to better match the real in-season workflow.
+- `prepare_field_positions` now prints an unresolved review queue with:
+  - sequential `queue` index
+  - canonical teams
+  - `schedule_home` / `schedule_away`
+  - `prefix_a` / `prefix_b`
+  - `resolved_count`
+- `resolve_field_position_prefix` now supports queue-driven review with:
+  - `--queue-index`
+  - `--which a|b`
+- This keeps the older explicit mode available:
+  - `--game-id`
+  - `--prefix`
+- Rationale:
+  - when new weekly games arrive, the operator usually does not know the `game_id` or raw prefix in advance
+  - a console review queue lets the operator just work top-to-bottom and assign one side per game
+  - the opposite prefix is still auto-filled, keeping the manual step small and auditable

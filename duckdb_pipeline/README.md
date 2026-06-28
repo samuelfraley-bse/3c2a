@@ -101,6 +101,7 @@ For field-position review and enrichment:
 ```powershell
 uv run --active prepare_field_positions --season 2025-26 --source-plays-run-id <plays_run_id>
 uv run --active resolve_field_position_prefix --season 2025-26 --source-plays-run-id <plays_run_id> --game-id 20250830_2nv6 --prefix "LONG BEA" --canonical-team "Long Beach"
+uv run --active resolve_field_position_prefix --season 2025-26 --source-plays-run-id <plays_run_id> --queue-index 4 --which a --canonical-team "Long Beach"
 uv run --active apply_field_positions --season 2025-26 --source-plays-run-id <plays_run_id>
 ```
 
@@ -110,11 +111,14 @@ The intended stable loop is:
 
 1. Scrape `plays` for a season or week.
 2. Detect per-game prefixes with `prepare_field_positions`.
-3. Review the output row for each game:
+3. Review the unresolved queue output for each game:
+   - each unresolved game gets a sequential `queue` number
    - canonical teams are shown
    - both observed prefixes are shown
 4. Resolve one prefix with `resolve_field_position_prefix`.
    - the other prefix is auto-assigned to the other team
+   - this can be done either by explicit `--game-id` and `--prefix`
+   - or by `--queue-index` and `--which a|b` when you are just working top-to-bottom through new games
 5. Materialize `play_field_positions` with `apply_field_positions`.
 
 This keeps:
@@ -122,6 +126,18 @@ This keeps:
 - raw `plays` unchanged
 - manual decisions auditable in `field_position_crosswalk`
 - derived field-position data rebuildable when logic changes
+
+## Review queue workflow
+
+For in-season use, the intended operator flow is:
+
+1. scrape new `plays`
+2. run `prepare_field_positions`
+3. look at the unresolved queue in the console
+4. for each queued game, pick whether `prefix_a` or `prefix_b` maps to the named canonical team
+5. let the command auto-assign the other side
+
+That avoids needing to know `game_id` or the raw prefix string ahead of time, which makes weekly manual review much less fragile.
 
 ## Test
 

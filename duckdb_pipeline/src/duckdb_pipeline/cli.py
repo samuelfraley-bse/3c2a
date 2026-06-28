@@ -209,6 +209,70 @@ def _print_review_rows(rows: list[tuple[object, ...]]) -> None:
         print(" | ".join("" if value is None else str(value) for value in row))
 
 
+def _load_field_position_review_queue(
+    conn,
+    season: str,
+    source_plays_run_id: str,
+    include_resolved: bool = False,
+) -> list[dict[str, object]]:
+    rows = conn.execute(
+        """
+        WITH ranked AS (
+            SELECT
+                p.game_id,
+                p.team_1,
+                p.team_2,
+                p.schedule_home,
+                p.schedule_away,
+                p.prefix,
+                row_number() OVER (PARTITION BY p.game_id ORDER BY p.prefix) AS prefix_rank,
+                COUNT(c.prefix) OVER (PARTITION BY p.game_id) AS resolved_count
+            FROM field_position_prefixes p
+            LEFT JOIN field_position_crosswalk c
+              ON c.season = p.season
+             AND c.source_plays_run_id = p.source_plays_run_id
+             AND c.game_id = p.game_id
+             AND c.prefix = p.prefix
+            WHERE p.season = ? AND p.source_plays_run_id = ?
+        )
+        SELECT
+            game_id,
+            team_1,
+            team_2,
+            schedule_home,
+            schedule_away,
+            MAX(CASE WHEN prefix_rank = 1 THEN prefix END) AS prefix_a,
+            MAX(CASE WHEN prefix_rank = 2 THEN prefix END) AS prefix_b,
+            COUNT(*) AS prefix_count,
+            MAX(COALESCE(resolved_count, 0)) AS resolved_count
+        FROM ranked
+        GROUP BY 1,2,3,4,5
+        ORDER BY game_id
+        """,
+        [season, source_plays_run_id],
+    ).fetchall()
+    queue: list[dict[str, object]] = []
+    next_index = 1
+    for row in rows:
+        record = {
+            "queue_index": None,
+            "game_id": row[0],
+            "team_1": row[1],
+            "team_2": row[2],
+            "schedule_home": row[3],
+            "schedule_away": row[4],
+            "prefix_a": row[5],
+            "prefix_b": row[6],
+            "prefix_count": row[7],
+            "resolved_count": row[8],
+        }
+        if include_resolved or record["resolved_count"] < record["prefix_count"]:
+            record["queue_index"] = next_index
+            next_index += 1
+            queue.append(record)
+    return queue
+
+
 def main_structure(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Scrape standings, schedules, and games into DuckDB.")
     parser.add_argument("--season", default=DEFAULT_SEASON)
@@ -320,6 +384,7 @@ def main_prepare_field_positions(argv: list[str] | None = None) -> int:
     parser.add_argument("--db-path", default=DEFAULT_DB_PATH)
     parser.add_argument("--source-plays-run-id", default=None)
     parser.add_argument("--limit-games", type=int, default=None)
+    parser.add_argument("--include-resolved", action="store_true")
     args = parser.parse_args(argv)
 
     from .db import connect, init_db, insert_rows
@@ -350,39 +415,35 @@ def main_prepare_field_positions(argv: list[str] | None = None) -> int:
         )
         insert_rows(conn, "field_position_prefixes", prefix_rows)
 
-        rows = conn.execute(
-            """
-            WITH ranked AS (
-                SELECT
-                    p.game_id,
-                    p.team_1,
-                    p.team_2,
-                    p.schedule_home,
-                    p.schedule_away,
-                    p.prefix,
-                    row_number() OVER (PARTITION BY p.game_id ORDER BY p.prefix) AS prefix_rank
-                FROM field_position_prefixes p
-                WHERE p.season = ? AND p.source_plays_run_id = ?
-            )
-            SELECT
-                game_id,
-                team_1,
-                team_2,
-                schedule_home,
-                schedule_away,
-                MAX(CASE WHEN prefix_rank = 1 THEN prefix END) AS prefix_a,
-                MAX(CASE WHEN prefix_rank = 2 THEN prefix END) AS prefix_b,
-                COUNT(*) AS prefix_count
-            FROM ranked
-            GROUP BY 1,2,3,4,5
-            ORDER BY game_id
-            """,
-            [args.season, source_plays_run_id],
-        ).fetchall()
+        rows = _load_field_position_review_queue(
+            conn,
+            args.season,
+            source_plays_run_id,
+            include_resolved=args.include_resolved,
+        )
 
-        print("game_id | team_1 | team_2 | schedule_home | schedule_away | prefix_a | prefix_b | prefix_count")
-        _print_review_rows(rows)
-        print(f"\nDetected {len(prefix_rows)} prefix rows across {len(rows)} games for plays run {source_plays_run_id}.")
+        print(
+            "queue | game_id | team_1 | team_2 | schedule_home | schedule_away | "
+            "prefix_a | prefix_b | prefix_count | resolved_count"
+        )
+        _print_review_rows(
+            [
+                (
+                    row["queue_index"],
+                    row["game_id"],
+                    row["team_1"],
+                    row["team_2"],
+                    row["schedule_home"],
+                    row["schedule_away"],
+                    row["prefix_a"],
+                    row["prefix_b"],
+                    row["prefix_count"],
+                    row["resolved_count"],
+                )
+                for row in rows
+            ]
+        )
+        print(f"\nDetected {len(prefix_rows)} prefix rows across {len(rows)} queued games for plays run {source_plays_run_id}.")
         return 0
     finally:
         conn.close()
@@ -393,8 +454,10 @@ def main_resolve_field_position_prefix(argv: list[str] | None = None) -> int:
     parser.add_argument("--season", default=DEFAULT_SEASON)
     parser.add_argument("--db-path", default=DEFAULT_DB_PATH)
     parser.add_argument("--source-plays-run-id", default=None)
-    parser.add_argument("--game-id", required=True)
-    parser.add_argument("--prefix", required=True)
+    parser.add_argument("--game-id")
+    parser.add_argument("--prefix")
+    parser.add_argument("--queue-index", type=int)
+    parser.add_argument("--which", choices=["a", "b"])
     parser.add_argument("--canonical-team", required=True)
     parser.add_argument("--note", default="")
     args = parser.parse_args(argv)
@@ -411,12 +474,27 @@ def main_resolve_field_position_prefix(argv: list[str] | None = None) -> int:
                 f"No detected prefixes found for plays run {source_plays_run_id}. Run prepare_field_positions first."
             )
 
+        game_id = args.game_id
+        prefix = args.prefix
+        if args.queue_index is not None:
+            queue = _load_field_position_review_queue(conn, args.season, source_plays_run_id)
+            chosen = next((row for row in queue if row["queue_index"] == args.queue_index), None)
+            if chosen is None:
+                raise RuntimeError(f"queue-index {args.queue_index} not found in unresolved review queue")
+            if not args.which:
+                raise RuntimeError("--which is required when using --queue-index")
+            game_id = str(chosen["game_id"])
+            prefix = str(chosen["prefix_a"] if args.which == "a" else chosen["prefix_b"])
+
+        if not game_id or not prefix:
+            raise RuntimeError("Provide either --game-id and --prefix, or --queue-index and --which")
+
         rows = build_crosswalk_resolution_rows(
             prefix_rows,
             args.season,
             source_plays_run_id,
-            args.game_id,
-            args.prefix,
+            game_id,
+            prefix,
             args.canonical_team,
             args.note,
         )
@@ -425,7 +503,7 @@ def main_resolve_field_position_prefix(argv: list[str] | None = None) -> int:
             DELETE FROM field_position_crosswalk
             WHERE season = ? AND source_plays_run_id = ? AND game_id = ?
             """,
-            [args.season, source_plays_run_id, args.game_id],
+            [args.season, source_plays_run_id, game_id],
         )
         insert_rows(conn, "field_position_crosswalk", rows)
         print("Resolved crosswalk rows:")
