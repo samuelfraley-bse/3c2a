@@ -144,3 +144,16 @@ uv run --active python -m unittest discover tests
   - when new weekly games arrive, the operator usually does not know the `game_id` or raw prefix in advance
   - a console review queue lets the operator just work top-to-bottom and assign one side per game
   - the opposite prefix is still auto-filled, keeping the manual step small and auditable
+
+### Interactive review loop
+- Added a one-command interactive mode:
+  - `prepare_field_positions --review`
+- This mode:
+  - rebuilds detected prefixes
+  - shows the next unresolved game
+  - prompts `Which prefix belongs to <team_1>? [a/b/s/q]`
+  - auto-fills the opposite side after a single answer
+- Verified the interactive flow across the unresolved sample queue for the 10-game validation run.
+- Confirmed the loop reaches:
+  - `No unresolved field-position games remain for this plays run.`
+- Confirmed the queue display intentionally resets to `Queue 1` after each answer because it always reloads the next unresolved game rather than preserving a stale queue index.

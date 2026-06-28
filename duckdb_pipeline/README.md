@@ -100,6 +100,7 @@ For field-position review and enrichment:
 
 ```powershell
 uv run --active prepare_field_positions --season 2025-26 --source-plays-run-id <plays_run_id>
+uv run --active prepare_field_positions --season 2025-26 --source-plays-run-id <plays_run_id> --review
 uv run --active resolve_field_position_prefix --season 2025-26 --source-plays-run-id <plays_run_id> --game-id 20250830_2nv6 --prefix "LONG BEA" --canonical-team "Long Beach"
 uv run --active resolve_field_position_prefix --season 2025-26 --source-plays-run-id <plays_run_id> --queue-index 4 --which a --canonical-team "Long Beach"
 uv run --active apply_field_positions --season 2025-26 --source-plays-run-id <plays_run_id>
@@ -132,12 +133,15 @@ This keeps:
 For in-season use, the intended operator flow is:
 
 1. scrape new `plays`
-2. run `prepare_field_positions`
-3. look at the unresolved queue in the console
-4. for each queued game, pick whether `prefix_a` or `prefix_b` maps to the named canonical team
+2. run `prepare_field_positions --review`
+3. the console shows the next unresolved game
+4. answer `a` or `b` for which prefix belongs to `team_1`
 5. let the command auto-assign the other side
+6. continue until the queue is empty, or use `s` to skip and `q` to stop
 
 That avoids needing to know `game_id` or the raw prefix string ahead of time, which makes weekly manual review much less fragile.
+
+The prompt intentionally resets to `Queue 1` after each resolution, because it always reloads the next unresolved game instead of preserving a stale index from the earlier list.
 
 ## Test
 

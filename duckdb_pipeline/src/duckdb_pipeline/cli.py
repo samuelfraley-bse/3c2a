@@ -209,6 +209,30 @@ def _print_review_rows(rows: list[tuple[object, ...]]) -> None:
         print(" | ".join("" if value is None else str(value) for value in row))
 
 
+def _print_field_position_queue(rows: list[dict[str, object]]) -> None:
+    print(
+        "queue | game_id | team_1 | team_2 | schedule_home | schedule_away | "
+        "prefix_a | prefix_b | prefix_count | resolved_count"
+    )
+    _print_review_rows(
+        [
+            (
+                row["queue_index"],
+                row["game_id"],
+                row["team_1"],
+                row["team_2"],
+                row["schedule_home"],
+                row["schedule_away"],
+                row["prefix_a"],
+                row["prefix_b"],
+                row["prefix_count"],
+                row["resolved_count"],
+            )
+            for row in rows
+        ]
+    )
+
+
 def _load_field_position_review_queue(
     conn,
     season: str,
@@ -271,6 +295,105 @@ def _load_field_position_review_queue(
             next_index += 1
             queue.append(record)
     return queue
+
+
+def _upsert_crosswalk_rows(
+    conn,
+    prefix_rows: list[dict[str, object]],
+    season: str,
+    source_plays_run_id: str,
+    game_id: str,
+    prefix: str,
+    canonical_team: str,
+    note: str = "",
+    resolution_method: str = "manual",
+) -> list[dict[str, object]]:
+    from .db import insert_rows
+
+    rows = build_crosswalk_resolution_rows(
+        prefix_rows,
+        season,
+        source_plays_run_id,
+        game_id,
+        prefix,
+        canonical_team,
+        note,
+        resolution_method=resolution_method,
+    )
+    conn.execute(
+        """
+        DELETE FROM field_position_crosswalk
+        WHERE season = ? AND source_plays_run_id = ? AND game_id = ?
+        """,
+        [season, source_plays_run_id, game_id],
+    )
+    insert_rows(conn, "field_position_crosswalk", rows)
+    return rows
+
+
+def _run_field_position_review_loop(
+    conn,
+    prefix_rows: list[dict[str, object]],
+    season: str,
+    source_plays_run_id: str,
+) -> int:
+    resolved_games = 0
+    skipped_games = 0
+    while True:
+        queue = _load_field_position_review_queue(conn, season, source_plays_run_id)
+        if not queue:
+            print("No unresolved field-position games remain for this plays run.")
+            break
+
+        current = queue[0]
+        team_1 = str(current["team_1"] or "")
+        team_2 = str(current["team_2"] or "")
+        prefix_a = str(current["prefix_a"] or "")
+        prefix_b = str(current["prefix_b"] or "")
+
+        print()
+        print(
+            f"Queue {current['queue_index']} | game_id={current['game_id']} | "
+            f"{team_1} vs {team_2}"
+        )
+        print(
+            f"schedule_home={current['schedule_home']} | "
+            f"schedule_away={current['schedule_away']}"
+        )
+        print(f"a = {prefix_a}")
+        print(f"b = {prefix_b}")
+        print(f"Which prefix belongs to {team_1}? [a/b/s/q]")
+
+        choice = input("> ").strip().lower()
+        if choice == "q":
+            print(f"Stopped review. Resolved {resolved_games} games, skipped {skipped_games}.")
+            break
+        if choice == "s":
+            skipped_games += 1
+            print(f"Skipped {current['game_id']}.")
+            continue
+        if choice not in {"a", "b"}:
+            print("Please enter a, b, s, or q.")
+            continue
+
+        chosen_prefix = prefix_a if choice == "a" else prefix_b
+        rows = _upsert_crosswalk_rows(
+            conn,
+            prefix_rows,
+            season,
+            source_plays_run_id,
+            str(current["game_id"]),
+            chosen_prefix,
+            team_1,
+            note="review-queue",
+            resolution_method="manual-review-queue",
+        )
+        resolved_games += 1
+        print("Resolved crosswalk rows:")
+        for row in rows:
+            print(f"{row['game_id']} | {row['prefix']} -> {row['canonical_team']}")
+
+    return 0
 
 
 def main_structure(argv: list[str] | None = None) -> int:
@@ -385,6 +508,7 @@ def main_prepare_field_positions(argv: list[str] | None = None) -> int:
     parser.add_argument("--source-plays-run-id", default=None)
     parser.add_argument("--limit-games", type=int, default=None)
     parser.add_argument("--include-resolved", action="store_true")
+    parser.add_argument("--review", action="store_true")
     args = parser.parse_args(argv)
 
     from .db import connect, init_db, insert_rows
@@ -422,28 +546,10 @@ def main_prepare_field_positions(argv: list[str] | None = None) -> int:
             include_resolved=args.include_resolved,
         )
 
-        print(
-            "queue | game_id | team_1 | team_2 | schedule_home | schedule_away | "
-            "prefix_a | prefix_b | prefix_count | resolved_count"
-        )
-        _print_review_rows(
-            [
-                (
-                    row["queue_index"],
-                    row["game_id"],
-                    row["team_1"],
-                    row["team_2"],
-                    row["schedule_home"],
-                    row["schedule_away"],
-                    row["prefix_a"],
-                    row["prefix_b"],
-                    row["prefix_count"],
-                    row["resolved_count"],
-                )
-                for row in rows
-            ]
-        )
+        _print_field_position_queue(rows)
         print(f"\nDetected {len(prefix_rows)} prefix rows across {len(rows)} queued games for plays run {source_plays_run_id}.")
+        if args.review:
+            return _run_field_position_review_loop(conn, prefix_rows, args.season, source_plays_run_id)
         return 0
     finally:
         conn.close()
@@ -489,23 +595,16 @@ def main_resolve_field_position_prefix(argv: list[str] | None = None) -> int:
         if not game_id or not prefix:
             raise RuntimeError("Provide either --game-id and --prefix, or --queue-index and --which")
 
-        rows = build_crosswalk_resolution_rows(
+        rows = _upsert_crosswalk_rows(
+            conn,
             prefix_rows,
             args.season,
             source_plays_run_id,
             game_id,
             prefix,
             args.canonical_team,
-            args.note,
+            note=args.note,
         )
-        conn.execute(
-            """
-            DELETE FROM field_position_crosswalk
-            WHERE season = ? AND source_plays_run_id = ? AND game_id = ?
-            """,
-            [args.season, source_plays_run_id, game_id],
-        )
-        insert_rows(conn, "field_position_crosswalk", rows)
         print("Resolved crosswalk rows:")
         for row in rows:
             print(f"{row['game_id']} | {row['prefix']} -> {row['canonical_team']}")
