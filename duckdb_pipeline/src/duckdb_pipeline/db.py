@@ -179,6 +179,58 @@ def init_db(conn) -> None:
     )
     conn.execute(
         """
+        CREATE TABLE IF NOT EXISTS field_position_prefixes (
+            season TEXT NOT NULL,
+            source_plays_run_id TEXT NOT NULL,
+            game_id TEXT NOT NULL,
+            prefix TEXT NOT NULL,
+            team_1 TEXT,
+            team_2 TEXT,
+            schedule_home TEXT,
+            schedule_away TEXT,
+            play_count INTEGER,
+            first_play_id INTEGER,
+            last_play_id INTEGER,
+            detected_at TIMESTAMP NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS field_position_crosswalk (
+            season TEXT NOT NULL,
+            source_plays_run_id TEXT NOT NULL,
+            game_id TEXT NOT NULL,
+            prefix TEXT NOT NULL,
+            canonical_team TEXT NOT NULL,
+            resolution_method TEXT NOT NULL,
+            note TEXT,
+            resolved_at TIMESTAMP NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS play_field_positions (
+            run_id TEXT NOT NULL,
+            season TEXT NOT NULL,
+            source_plays_run_id TEXT NOT NULL,
+            game_id TEXT NOT NULL,
+            play_id INTEGER NOT NULL,
+            field_position TEXT,
+            field_pos_prefix TEXT,
+            yardline_raw INTEGER,
+            offense TEXT,
+            prefix_owner TEXT,
+            field_pos_side TEXT,
+            yardline_100 INTEGER,
+            resolution_status TEXT NOT NULL,
+            created_at TIMESTAMP NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
         CREATE TABLE IF NOT EXISTS pipeline_runs (
             run_id TEXT NOT NULL,
             season TEXT NOT NULL,

@@ -97,3 +97,31 @@
 ```powershell
 uv run --active python -m unittest discover tests
 ```
+
+### Field-position workflow added
+- Added `field_position_prefixes` to store detected per-game prefixes from a specific `plays` run.
+- Added `field_position_crosswalk` to store manual prefix-to-team decisions.
+- Added `play_field_positions` as a rebuildable derived layer keyed back to the source `plays` run.
+- Added console commands:
+  - `prepare_field_positions`
+  - `resolve_field_position_prefix`
+  - `apply_field_positions`
+- The resolution workflow now supports:
+  - displaying canonical team names with both detected prefixes
+  - manually selecting one prefix/team mapping
+  - automatically assigning the other prefix to the other team
+
+### Field-position validation
+- Tested prefix detection on the 10-game plays validation run:
+  - `440482d8-cb31-4388-9396-8103a16b07d2`
+- Verified sample review output for truncated prefixes like:
+  - `LONG BEA`
+  - `RIVERSID`
+  - `SADDLEBA`
+- Tested manual resolution for:
+  - `20250830_2nv6`
+  - `LONG BEA -> Long Beach`
+  - auto-filled `RIVERSID -> Riverside`
+- Tested enrichment materialization for the 10-game sample:
+  - `1638` derived field-position rows written
+  - unresolved rows remained high because only one game had been manually resolved, which is expected for the current validation state

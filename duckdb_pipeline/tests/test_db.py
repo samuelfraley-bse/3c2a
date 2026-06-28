@@ -38,6 +38,9 @@ class DbTests(unittest.TestCase):
             self.assertIn("raw_pbp_html", tables)
             self.assertIn("plays", tables)
             self.assertIn("failed_game_fetches", tables)
+            self.assertIn("field_position_prefixes", tables)
+            self.assertIn("field_position_crosswalk", tables)
+            self.assertIn("play_field_positions", tables)
             conn.close()
 
 
