@@ -96,6 +96,8 @@ uv run --active scrape_season_plays --season 2025-26 --source-run-id <structure_
 uv run --active scrape_season_plays --season 2025-26 --source-run-id <structure_run_id> --limit 3
 ```
 
+For large full-season runs, treat the process as incomplete until the console prints `DONE run_id=...`. The `WRITE plays ...` line is only the start of the DuckDB insert/commit phase and may be followed by several minutes of database work before the prompt returns.
+
 For field-position review and enrichment:
 
 ```powershell

@@ -172,3 +172,19 @@ uv run --active python -m unittest discover tests
 - Decision for now:
   - keep the workflow manual-first and stable
   - defer larger historical automation until it is clearly worth the added complexity
+
+### Full-season 2025-26 plays run completed
+- Re-ran the full `2025-26` plays scrape after confirming that the earlier interrupted run had not fully committed.
+- Successful completed plays run:
+  - `3e4103ae-62c3-4195-9c45-71df4fcc23ce`
+- Final logged counts:
+  - `games = 347`
+  - `raw_pbp = 344`
+  - `plays = 55548`
+  - `failed = 15`
+- Important operational note:
+  - the console `WRITE plays ...` line is emitted before DuckDB finishes the heavy insert/commit phase
+  - on this full-season run, `WRITE` to `DONE` took roughly 6 minutes 38 seconds
+  - future runs should be treated as incomplete until the console prints `DONE run_id=...` and returns to the prompt
+- Next intended step after returning to this project:
+  - run `prepare_field_positions --review` against plays run `3e4103ae-62c3-4195-9c45-71df4fcc23ce`
