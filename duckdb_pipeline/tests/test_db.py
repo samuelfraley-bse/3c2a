@@ -31,6 +31,13 @@ class DbTests(unittest.TestCase):
             )
             value = conn.execute("SELECT COUNT(*) FROM pipeline_runs").fetchone()[0]
             self.assertEqual(value, 1)
+            tables = {
+                row[0]
+                for row in conn.execute("SELECT table_name FROM information_schema.tables").fetchall()
+            }
+            self.assertIn("raw_pbp_html", tables)
+            self.assertIn("plays", tables)
+            self.assertIn("failed_game_fetches", tables)
             conn.close()
 
 

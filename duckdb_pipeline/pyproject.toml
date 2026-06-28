@@ -11,6 +11,7 @@ dependencies = [
 
 [project.scripts]
 scrape_season_structure = "duckdb_pipeline.cli:main"
+scrape_season_plays = "duckdb_pipeline.cli:main_plays"
 
 [build-system]
 requires = ["setuptools>=61.0", "wheel"]

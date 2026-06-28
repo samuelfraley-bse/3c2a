@@ -107,6 +107,78 @@ def init_db(conn) -> None:
     )
     conn.execute(
         """
+        CREATE TABLE IF NOT EXISTS raw_pbp_html (
+            run_id TEXT NOT NULL,
+            season TEXT NOT NULL,
+            source_run_id TEXT NOT NULL,
+            game_id TEXT NOT NULL,
+            fetched_at TIMESTAMP NOT NULL,
+            source_url TEXT NOT NULL,
+            html_text TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS plays (
+            run_id TEXT NOT NULL,
+            season TEXT NOT NULL,
+            game_id TEXT NOT NULL,
+            home_team TEXT,
+            away_team TEXT,
+            schedule_home TEXT,
+            schedule_away TEXT,
+            play_id INTEGER NOT NULL,
+            drive_id INTEGER,
+            drive_start_time TEXT,
+            quarter INTEGER,
+            down INTEGER,
+            distance INTEGER,
+            field_position TEXT,
+            yardline_raw INTEGER,
+            offense TEXT,
+            defense TEXT,
+            play_type TEXT,
+            passer TEXT,
+            rusher TEXT,
+            receiver TEXT,
+            pass_result TEXT,
+            yards_gained INTEGER,
+            is_dropback BOOLEAN,
+            is_attempt BOOLEAN,
+            completion BOOLEAN,
+            is_interception BOOLEAN,
+            is_td BOOLEAN,
+            is_sack BOOLEAN,
+            is_fumble BOOLEAN,
+            fumble_recovered_by TEXT,
+            is_penalty BOOLEAN,
+            penalty_team TEXT,
+            penalty_type TEXT,
+            penalty_player TEXT,
+            penalty_yards INTEGER,
+            fg_result TEXT,
+            tackler_1 TEXT,
+            tackler_2 TEXT,
+            raw_text TEXT
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS failed_game_fetches (
+            run_id TEXT NOT NULL,
+            season TEXT NOT NULL,
+            source_run_id TEXT NOT NULL,
+            game_id TEXT NOT NULL,
+            source_url TEXT NOT NULL,
+            failure_reason TEXT NOT NULL,
+            recorded_at TIMESTAMP NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
         CREATE TABLE IF NOT EXISTS pipeline_runs (
             run_id TEXT NOT NULL,
             season TEXT NOT NULL,
@@ -120,6 +192,10 @@ def init_db(conn) -> None:
         )
         """
     )
+
+
+def fetch_all(conn, sql: str, params: list[Any] | None = None) -> list[tuple[Any, ...]]:
+    return conn.execute(sql, params or []).fetchall()
 
 
 def insert_rows(conn, table: str, rows: list[dict[str, Any]]) -> None:

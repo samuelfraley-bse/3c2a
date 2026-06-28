@@ -1,6 +1,12 @@
 import unittest
 
-from duckdb_pipeline.parse import build_games_rows, parse_schedule_html, parse_standings_html
+from duckdb_pipeline.parse import (
+    build_games_rows,
+    normalize_play_text,
+    parse_pbp_html,
+    parse_schedule_html,
+    parse_standings_html,
+)
 
 
 STANDINGS_HTML = """
@@ -73,8 +79,68 @@ SCHEDULE_NEUTRAL_HOME_HTML = """
 </html>
 """
 
+PBP_HTML = """
+<html>
+  <head>
+    <meta property="og:title" content="Foothill vs. San Mateo - Box Score - 9/6/2025" />
+    <link rel="canonical" href="https://3c2asports.org/sports/fball/2025-26/boxscores/20250906_abcd.xml?view=plays" />
+  </head>
+  <body>
+    <table>
+      <tr><td id="qtr1">1st Quarter</td></tr>
+      <tr><th colspan="2">Foothill at 15:00</th></tr>
+      <tr>
+        <td>1st and 10 at FOOTHILL25</td>
+        <td>John Smith rush for 5 yards to the FOOTHILL30 (Mike Jones).</td>
+      </tr>
+      <tr>
+        <td>2nd and 5 at FOOTHILL30</td>
+        <td>John Smith pass complete to Alex Ray for 12 yards to the SAN MATE48 (Ty Lee).</td>
+      </tr>
+      <tr>
+        <td>1st and 10 at SAN MATE48</td>
+        <td>PENALTY SAN MATE holding (Ty Lee) 10 yards</td>
+      </tr>
+    </table>
+  </body>
+</html>
+"""
+
+PBP_HTML_WITH_ENTITY_ARTIFACT = """
+<html>
+  <head>
+    <meta property="og:title" content="Butte vs. Reedley - Box Score - 8/29/2025" />
+    <link rel="canonical" href="https://3c2asports.org/sports/fball/2025-26/boxscores/20250829_evpw.xml?view=plays" />
+  </head>
+  <body>
+    <table>
+      <tr><td id="qtr1">1st Quarter</td></tr>
+      <tr><th colspan="2">Butte at 13:02</th></tr>
+      <tr>
+        <td>2nd and 4 at REEDLEY44</td>
+        <td>Amare' Cooper pass complete to Rhys Cooper&amp;nbs for 14 yards to the REEDLEY44 (Christian Phill).</td>
+      </tr>
+    </table>
+  </body>
+</html>
+"""
+
 
 class ParseTests(unittest.TestCase):
+    def test_normalize_play_text_cleans_entity_artifacts(self) -> None:
+        self.assertEqual(
+            normalize_play_text("Amare' Cooper pass complete to Rhys Cooper&nbs for 14 yards"),
+            "Amare' Cooper pass complete to Rhys Cooper for 14 yards",
+        )
+        self.assertEqual(
+            normalize_play_text("Amare' Cooper pass incomplete to Rhys Cooper&nbs, dropped pass."),
+            "Amare' Cooper pass incomplete to Rhys Cooper, dropped pass.",
+        )
+        self.assertEqual(
+            normalize_play_text("Rhys Cooper,dropped pass."),
+            "Rhys Cooper, dropped pass.",
+        )
+
     def test_parse_standings_html(self) -> None:
         rows = parse_standings_html(STANDINGS_HTML, "2025-26", "run-1")
         self.assertEqual(len(rows), 1)
@@ -194,6 +260,54 @@ class ParseTests(unittest.TestCase):
         self.assertEqual(games[0]["pairing_status"], "paired")
         self.assertEqual(games[0]["home_team_canonical"], "Chabot")
         self.assertEqual(games[0]["away_team_canonical"], "Cabrillo")
+
+    def test_parse_pbp_html_base_rows(self) -> None:
+        game = {
+            "game_id": "20250906_abcd",
+            "schedule_home": "Foothill",
+            "schedule_away": "San Mateo",
+            "home_team_canonical": "Foothill",
+            "away_team_canonical": "San Mateo",
+        }
+        rows = parse_pbp_html(PBP_HTML, game, "2025-26", "run-2")
+        self.assertEqual(len(rows), 3)
+
+        rush = rows[0]
+        self.assertEqual(rush["play_type"], "rush")
+        self.assertEqual(rush["rusher"], "John Smith")
+        self.assertEqual(rush["yards_gained"], 5)
+        self.assertEqual(rush["offense"], "Foothill")
+        self.assertEqual(rush["defense"], "San Mateo")
+        self.assertEqual(rush["yardline_raw"], 25)
+
+        completion = rows[1]
+        self.assertEqual(completion["play_type"], "pass")
+        self.assertEqual(completion["passer"], "John Smith")
+        self.assertEqual(completion["receiver"], "Alex Ray")
+        self.assertEqual(completion["pass_result"], "complete")
+        self.assertTrue(completion["completion"])
+
+        penalty = rows[2]
+        self.assertEqual(penalty["play_type"], "penalty")
+        self.assertTrue(penalty["is_penalty"])
+        self.assertEqual(penalty["penalty_team"], "SAN MATE")
+        self.assertEqual(penalty["penalty_player"], "Ty Lee")
+
+    def test_parse_pbp_html_cleans_raw_text_entity_artifact(self) -> None:
+        game = {
+            "game_id": "20250829_evpw",
+            "schedule_home": "Butte",
+            "schedule_away": "Reedley",
+            "home_team_canonical": "Butte",
+            "away_team_canonical": "Reedley",
+        }
+        rows = parse_pbp_html(PBP_HTML_WITH_ENTITY_ARTIFACT, game, "2025-26", "run-3")
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(
+            rows[0]["raw_text"],
+            "Amare' Cooper pass complete to Rhys Cooper for 14 yards to the REEDLEY44 (Christian Phill).",
+        )
+        self.assertEqual(rows[0]["receiver"], "Rhys Cooper")
 
 
 if __name__ == "__main__":

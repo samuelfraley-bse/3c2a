@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import json
 import time
 from datetime import datetime, timezone
 
 import requests
 
 from .constants import BASE_URL, DEFAULT_USER_AGENT
-from .parse import build_games_rows, parse_schedule_html, parse_standings_html
+from .parse import build_games_rows, parse_pbp_html, parse_schedule_html, parse_standings_html
 
 
 def utc_now() -> datetime:
@@ -111,4 +112,105 @@ def scrape_structure(season: str, delay: float, run_id: str) -> dict[str, object
         "raw_schedule_rows": raw_schedule_rows,
         "schedule_rows": schedule_rows,
         "games_rows": games_rows,
+    }
+
+
+def scrape_plays(
+    games_rows: list[dict[str, str]],
+    season: str,
+    delay: float,
+    run_id: str,
+    source_run_id: str,
+) -> dict[str, object]:
+    session = build_session()
+    raw_pbp_rows: list[dict[str, object]] = []
+    plays_rows: list[dict[str, object]] = []
+    failed_rows: list[dict[str, object]] = []
+
+    total_games = len(games_rows)
+    log(f"BEGIN plays season={season} run_id={run_id} source_run_id={source_run_id}")
+    log("STAGE pbp")
+
+    for index, game in enumerate(games_rows, start=1):
+        game_id = game["game_id"]
+        url = game.get("pbp_url") or ""
+        log(f"GAME  [{index}/{total_games}] {game_id}")
+        if not url:
+            failed_rows.append(
+                {
+                    "run_id": run_id,
+                    "season": season,
+                    "source_run_id": source_run_id,
+                    "game_id": game_id,
+                    "source_url": "",
+                    "failure_reason": "missing pbp_url",
+                    "recorded_at": utc_now(),
+                }
+            )
+            log(f"MISS  {game_id} -> missing pbp_url")
+            continue
+
+        try:
+            html = fetch(url, delay, session)
+        except Exception as exc:
+            failed_rows.append(
+                {
+                    "run_id": run_id,
+                    "season": season,
+                    "source_run_id": source_run_id,
+                    "game_id": game_id,
+                    "source_url": url,
+                    "failure_reason": str(exc),
+                    "recorded_at": utc_now(),
+                }
+            )
+            log(f"FAIL  {game_id} -> {exc}")
+            continue
+        raw_pbp_rows.append(
+            {
+                "run_id": run_id,
+                "season": season,
+                "source_run_id": source_run_id,
+                "game_id": game_id,
+                "fetched_at": utc_now(),
+                "source_url": url,
+                "html_text": html,
+            }
+        )
+        parsed_plays = parse_pbp_html(html, game, season, run_id)
+        if not parsed_plays:
+            failed_rows.append(
+                {
+                    "run_id": run_id,
+                    "season": season,
+                    "source_run_id": source_run_id,
+                    "game_id": game_id,
+                    "source_url": url,
+                    "failure_reason": "0 plays parsed",
+                    "recorded_at": utc_now(),
+                }
+            )
+            log(f"EMPTY {game_id} -> 0 plays parsed")
+            continue
+
+        plays_rows.extend(parsed_plays)
+        log(f"PARSE plays -> {len(parsed_plays)} rows for {game_id}")
+
+    summary = {
+        "source_run_id": source_run_id,
+        "games_requested": total_games,
+        "raw_pbp_count": len(raw_pbp_rows),
+        "plays_count": len(plays_rows),
+        "failed_games_count": len(failed_rows),
+    }
+    log(
+        "WRITE plays "
+        f"games={summary['games_requested']} raw_pbp={summary['raw_pbp_count']} "
+        f"plays={summary['plays_count']} failed={summary['failed_games_count']}"
+    )
+    return {
+        "raw_pbp_rows": raw_pbp_rows,
+        "plays_rows": plays_rows,
+        "failed_rows": failed_rows,
+        "summary_notes": json.dumps(summary, sort_keys=True),
     }

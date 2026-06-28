@@ -68,12 +68,32 @@
 - Verified all `347` games are `paired`.
 - Verified `0` paired games have blank `home_team_canonical` or `away_team_canonical`.
 
-### Next recommended step
-- Before the next clean scrape, either:
-  - delete the current DuckDB file and rerun, or
-  - inspect and remove the interrupted run from `pipeline_runs`
-- Then run:
+### Milestone 2 scaffold started
+- Added append-only `raw_pbp_html` table.
+- Added base `plays` table keyed by `run_id`, `season`, and `game_id`.
+- Added `failed_game_fetches` audit table for missing or zero-play game fetches.
+- Added a new console command:
+  - `scrape_season_plays`
+- Plays runs now point back to a structure snapshot via `source_run_id` stored in run notes and raw/failure tables.
+
+### Base PBP parser scope
+- Parses drive headers, quarter changes, down-distance, field-position token, and base play actors.
+- Keeps this milestone intentionally limited:
+  - no field-position owner crosswalk yet
+  - no `yardline_100` yet
+  - no participation join yet
+  - no player identity crosswalk yet
+
+### Validation
+- Added tests for:
+  - neutral-site schedule handling
+  - canonical game fallback logic
+  - base PBP parsing for rush/pass/penalty rows
+  - DuckDB schema initialization for the new PBP tables
+- Added a `--limit` option to `scrape_season_plays` for small validation runs before full-season ingest.
+- Updated interrupted plays runs to mark the `pipeline_runs` row as failed instead of leaving it stuck at `running`.
+- Verified local test suite passes:
 
 ```powershell
-uv run python -m duckdb_pipeline.cli --season 2025-26 --delay 8
+uv run --active python -m unittest discover tests
 ```
