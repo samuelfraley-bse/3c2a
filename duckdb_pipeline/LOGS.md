@@ -157,3 +157,18 @@ uv run --active python -m unittest discover tests
 - Confirmed the loop reaches:
   - `No unresolved field-position games remain for this plays run.`
 - Confirmed the queue display intentionally resets to `Queue 1` after each answer because it always reloads the next unresolved game rather than preserving a stale queue index.
+
+### Historical vs in-season note
+- Documented that the current field-position review flow is optimized for week-by-week in-season ingest.
+- Expected in-season pattern:
+  - scrape new games
+  - review a small unresolved queue
+  - apply the crosswalked field-position layer
+- Historical backfill can still use the same manual review flow for now.
+- If the historical scope becomes large, flag a future improvement for:
+  - batched review
+  - suggested mappings
+  - partial automation with manual confirmation
+- Decision for now:
+  - keep the workflow manual-first and stable
+  - defer larger historical automation until it is clearly worth the added complexity

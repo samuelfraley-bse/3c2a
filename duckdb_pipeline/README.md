@@ -143,6 +143,25 @@ That avoids needing to know `game_id` or the raw prefix string ahead of time, wh
 
 The prompt intentionally resets to `Queue 1` after each resolution, because it always reloads the next unresolved game instead of preserving a stale index from the earlier list.
 
+## Historical vs in-season
+
+The current field-position review flow is intentionally optimized for week-by-week in-season ingest:
+
+1. scrape the newest games
+2. run `prepare_field_positions --review`
+3. resolve the small unresolved queue
+4. apply the derived field-position layer
+
+That is expected to stay stable because the manual review surface per week should remain small.
+
+Historical backfill is a little different. The same review flow works today, and it is fine to keep using it for now, but if the historical scope gets large enough we may want a later assist layer such as:
+
+- batched review
+- suggested mappings
+- partial automation with manual confirmation
+
+For now, treat historical mode as manual-first and flag larger-scale automation as a future improvement rather than a requirement for the current pipeline.
+
 ## Test
 
 From the repo root:
