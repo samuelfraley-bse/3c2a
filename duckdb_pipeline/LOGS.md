@@ -185,6 +185,31 @@ uv run --active python -m unittest discover tests
 - Important operational note:
   - the console `WRITE plays ...` line is emitted before DuckDB finishes the heavy insert/commit phase
   - on this full-season run, `WRITE` to `DONE` took roughly 6 minutes 38 seconds
-  - future runs should be treated as incomplete until the console prints `DONE run_id=...` and returns to the prompt
+- future runs should be treated as incomplete until the console prints `DONE run_id=...` and returns to the prompt
 - Next intended step after returning to this project:
   - run `prepare_field_positions --review` against plays run `3e4103ae-62c3-4195-9c45-71df4fcc23ce`
+
+### Team-prefix memory review flow
+- Updated field-position review memory to follow confirmed `canonical_team + prefix` pairs rather than treating prefixes as globally exclusive.
+- This keeps the workflow aligned with the operator's real mental model:
+  - confirm which observed prefix belongs to the displayed canonical school
+  - reuse that same pairing in future games for the same school
+  - allow the same raw prefix text to appear for different schools in different games when the source site is ambiguous
+- `prepare_field_positions --review` now:
+  - prints progress while reviewing
+  - auto-seeds future games when a previously confirmed team-prefix pairing appears again
+  - keeps the review interactive instead of silently resolving the whole queue
+
+### Field-position apply validation
+- Applied field-position enrichment to the full-season `2025-26` plays run:
+  - source plays run: `3e4103ae-62c3-4195-9c45-71df4fcc23ce`
+- Validation result:
+  - `49,277` rows resolved
+  - `6,271` rows marked `no-field-position`
+  - `0` rows marked `unresolved-prefix`
+- Spot-checked sample `no-field-position` rows and confirmed they are expected non-scrimmage cases such as:
+  - `kickoff`
+  - `pat`
+- Takeaway:
+  - the crosswalk covered every row that actually carried a resolvable field-position token
+  - the remaining unresolved count is normal pipeline residue, not a mapping failure

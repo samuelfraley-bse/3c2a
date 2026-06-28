@@ -1,6 +1,8 @@
 import unittest
 
 from duckdb_pipeline.crosswalk import (
+    build_memory_seed_rows,
+    build_team_prefix_memory,
     build_crosswalk_resolution_rows,
     build_field_position_prefix_rows,
     build_field_position_rows,
@@ -74,6 +76,66 @@ class CrosswalkTests(unittest.TestCase):
         self.assertEqual(rows[0]["yardline_100"], 75)
         self.assertEqual(rows[1]["field_pos_side"], "opponent")
         self.assertEqual(rows[1]["yardline_100"], 40)
+
+    def test_build_team_prefix_memory_keeps_multiple_prefixes_per_team(self) -> None:
+        crosswalk_rows = [
+            {"prefix": "LANEY", "canonical_team": "Laney"},
+            {"prefix": "EAGLES", "canonical_team": "Laney"},
+            {"prefix": "MT. SAN", "canonical_team": "Mt. San Antonio"},
+            {"prefix": "MT. SAN", "canonical_team": "Mt. San Jacinto"},
+        ]
+        memory = build_team_prefix_memory(crosswalk_rows)
+        self.assertEqual(memory["Laney"], {"LANEY", "EAGLES"})
+        self.assertEqual(memory["Mt. San Antonio"], {"MT. SAN"})
+        self.assertEqual(memory["Mt. San Jacinto"], {"MT. SAN"})
+
+    def test_build_memory_seed_rows_auto_seeds_from_team_prefix_memory(self) -> None:
+        prefix_rows = [
+            {"game_id": "g1", "prefix": "LANEY", "team_1": "Laney", "team_2": "Butte"},
+            {"game_id": "g1", "prefix": "BUTTE", "team_1": "Laney", "team_2": "Butte"},
+        ]
+        rows = build_memory_seed_rows(
+            prefix_rows,
+            {"Laney": {"LANEY"}},
+            "2025-26",
+            "plays-run-2",
+        )
+        mapping = {row["prefix"]: row["canonical_team"] for row in rows}
+        self.assertEqual(mapping["LANEY"], "Laney")
+        self.assertEqual(mapping["BUTTE"], "Butte")
+        methods = {row["resolution_method"] for row in rows}
+        self.assertEqual(methods, {"auto-memory"})
+
+    def test_build_memory_seed_rows_skips_prefix_not_in_current_game_context(self) -> None:
+        prefix_rows = [
+            {"game_id": "g1", "prefix": "MER", "team_1": "Laney", "team_2": "Butte"},
+            {"game_id": "g1", "prefix": "BUTTE", "team_1": "Laney", "team_2": "Butte"},
+        ]
+        rows = build_memory_seed_rows(
+            prefix_rows,
+            {"Merced": {"MER"}},
+            "2025-26",
+            "plays-run-2",
+        )
+        self.assertEqual(rows, [])
+
+    def test_build_memory_seed_rows_allows_shared_prefix_for_different_schools(self) -> None:
+        prefix_rows = [
+            {"game_id": "g1", "prefix": "MT. SAN", "team_1": "Mt. San Antonio", "team_2": "San Diego Mesa"},
+            {"game_id": "g1", "prefix": "SAN DIEG", "team_1": "Mt. San Antonio", "team_2": "San Diego Mesa"},
+        ]
+        rows = build_memory_seed_rows(
+            prefix_rows,
+            {
+                "Mt. San Antonio": {"MT. SAN"},
+                "Mt. San Jacinto": {"MT. SAN"},
+            },
+            "2025-26",
+            "plays-run-2",
+        )
+        mapping = {row["prefix"]: row["canonical_team"] for row in rows}
+        self.assertEqual(mapping["MT. SAN"], "Mt. San Antonio")
+        self.assertEqual(mapping["SAN DIEG"], "San Diego Mesa")
 
 
 if __name__ == "__main__":

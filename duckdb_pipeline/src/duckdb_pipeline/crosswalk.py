@@ -160,3 +160,77 @@ def build_field_position_rows(
             }
         )
     return rows
+
+
+def build_team_prefix_memory(crosswalk_rows: list[dict[str, object]]) -> dict[str, set[str]]:
+    candidates: dict[str, set[str]] = {}
+    for row in crosswalk_rows:
+        prefix = str(row.get("prefix") or "").strip()
+        canonical_team = str(row.get("canonical_team") or "").strip()
+        if not prefix or not canonical_team:
+            continue
+        candidates.setdefault(canonical_team, set()).add(prefix)
+    return candidates
+
+
+def build_memory_seed_rows(
+    prefix_rows: list[dict[str, object]],
+    team_prefix_memory: dict[str, set[str]],
+    season: str,
+    source_plays_run_id: str,
+) -> list[dict[str, object]]:
+    prefix_rows_by_game: dict[str, list[dict[str, object]]] = {}
+    for row in prefix_rows:
+        game_id = str(row.get("game_id") or "").strip()
+        if not game_id:
+            continue
+        prefix_rows_by_game.setdefault(game_id, []).append(row)
+
+    seeded_rows: list[dict[str, object]] = []
+    for game_id, game_rows in sorted(prefix_rows_by_game.items()):
+        if len(game_rows) != 2:
+            continue
+
+        prefixes = [str(row.get("prefix") or "").strip() for row in game_rows]
+        if not all(prefixes):
+            continue
+
+        sample = game_rows[0]
+        team_1 = str(sample.get("team_1") or "").strip()
+        team_2 = str(sample.get("team_2") or "").strip()
+        valid_teams = {team_1, team_2} - {""}
+        if len(valid_teams) != 2:
+            continue
+
+        team_1_matches = [prefix for prefix in prefixes if prefix in team_prefix_memory.get(team_1, set())]
+        team_2_matches = [prefix for prefix in prefixes if prefix in team_prefix_memory.get(team_2, set())]
+
+        remembered_prefix = ""
+        remembered_team = ""
+
+        if len(team_1_matches) == 1 and len(team_2_matches) == 1:
+            if team_1_matches[0] != team_2_matches[0]:
+                remembered_prefix = team_1_matches[0]
+                remembered_team = team_1
+        elif len(team_1_matches) == 1 and not team_2_matches:
+            remembered_prefix = team_1_matches[0]
+            remembered_team = team_1
+        elif len(team_2_matches) == 1 and not team_1_matches:
+            remembered_prefix = team_2_matches[0]
+            remembered_team = team_2
+
+        if remembered_prefix and remembered_team:
+            seeded_rows.extend(
+                build_crosswalk_resolution_rows(
+                    prefix_rows,
+                    season,
+                    source_plays_run_id,
+                    game_id,
+                    remembered_prefix,
+                    remembered_team,
+                    note="preseeded from prior confirmed team-prefix memory",
+                    resolution_method="auto-memory",
+                )
+            )
+
+    return seeded_rows

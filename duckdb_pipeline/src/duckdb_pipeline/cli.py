@@ -8,6 +8,8 @@ from datetime import datetime, timezone
 
 from .constants import DEFAULT_DB_PATH, DEFAULT_DELAY, DEFAULT_SEASON
 from .crosswalk import (
+    build_memory_seed_rows,
+    build_team_prefix_memory,
     build_crosswalk_resolution_rows,
     build_field_position_prefix_rows,
     build_field_position_rows,
@@ -187,6 +189,26 @@ def _load_detected_prefix_rows(conn, season: str, source_plays_run_id: str) -> l
     return [dict(zip(columns, row)) for row in cursor.fetchall()]
 
 
+def _load_crosswalk_rows(
+    conn,
+    season: str,
+    source_plays_run_id: str | None = None,
+) -> list[dict[str, object]]:
+    sql = """
+        SELECT *
+        FROM field_position_crosswalk
+        WHERE season = ?
+    """
+    params: list[object] = [season]
+    if source_plays_run_id is not None:
+        sql += " AND source_plays_run_id = ?"
+        params.append(source_plays_run_id)
+    sql += " ORDER BY game_id, prefix"
+    cursor = conn.execute(sql, params)
+    columns = [column[0] for column in cursor.description]
+    return [dict(zip(columns, row)) for row in cursor.fetchall()]
+
+
 def _resolve_structure_run_id_for_plays_run(conn, plays_run_id: str) -> str:
     row = conn.execute(
         "SELECT notes FROM pipeline_runs WHERE run_id = ?",
@@ -331,6 +353,42 @@ def _upsert_crosswalk_rows(
     return rows
 
 
+def _preseed_memory_crosswalk_rows(
+    conn,
+    prefix_rows: list[dict[str, object]],
+    season: str,
+    source_plays_run_id: str,
+) -> int:
+    existing_rows = _load_crosswalk_rows(conn, season)
+    team_prefix_memory = build_team_prefix_memory(existing_rows)
+    if not team_prefix_memory:
+        return 0
+
+    existing_game_ids = {
+        str(row.get("game_id") or "")
+        for row in existing_rows
+        if str(row.get("source_plays_run_id") or "") == source_plays_run_id
+    }
+    candidate_prefix_rows = [
+        row
+        for row in prefix_rows
+        if str(row.get("game_id") or "") not in existing_game_ids
+    ]
+    seeded_rows = build_memory_seed_rows(
+        candidate_prefix_rows,
+        team_prefix_memory,
+        season,
+        source_plays_run_id,
+    )
+    if not seeded_rows:
+        return 0
+
+    from .db import insert_rows
+
+    insert_rows(conn, "field_position_crosswalk", seeded_rows)
+    return len({str(row["game_id"]) for row in seeded_rows})
+
+
 def _run_field_position_review_loop(
     conn,
     prefix_rows: list[dict[str, object]],
@@ -339,6 +397,8 @@ def _run_field_position_review_loop(
 ) -> int:
     resolved_games = 0
     skipped_games = 0
+    initial_queue = _load_field_position_review_queue(conn, season, source_plays_run_id)
+    initial_total = len(initial_queue)
     while True:
         queue = _load_field_position_review_queue(conn, season, source_plays_run_id)
         if not queue:
@@ -346,12 +406,18 @@ def _run_field_position_review_loop(
             break
 
         current = queue[0]
+        remaining_games = len(queue)
+        completed_games = initial_total - remaining_games
         team_1 = str(current["team_1"] or "")
         team_2 = str(current["team_2"] or "")
         prefix_a = str(current["prefix_a"] or "")
         prefix_b = str(current["prefix_b"] or "")
 
         print()
+        print(
+            f"Progress: completed={completed_games}/{initial_total} "
+            f"resolved_this_session={resolved_games} skipped={skipped_games} remaining={remaining_games}"
+        )
         print(
             f"Queue {current['queue_index']} | game_id={current['game_id']} | "
             f"{team_1} vs {team_2}"
@@ -392,6 +458,14 @@ def _run_field_position_review_loop(
         print("Resolved crosswalk rows:")
         for row in rows:
             print(f"{row['game_id']} | {row['prefix']} -> {row['canonical_team']}")
+        auto_seeded_games = _preseed_memory_crosswalk_rows(
+            conn,
+            prefix_rows,
+            season,
+            source_plays_run_id,
+        )
+        if auto_seeded_games:
+            print(f"Auto-seeded {auto_seeded_games} additional games from remembered prefixes.")
 
     return 0
 
@@ -538,6 +612,12 @@ def main_prepare_field_positions(argv: list[str] | None = None) -> int:
             [args.season, source_plays_run_id],
         )
         insert_rows(conn, "field_position_prefixes", prefix_rows)
+        auto_seeded_games = _preseed_memory_crosswalk_rows(
+            conn,
+            prefix_rows,
+            args.season,
+            source_plays_run_id,
+        )
 
         rows = _load_field_position_review_queue(
             conn,
@@ -547,6 +627,8 @@ def main_prepare_field_positions(argv: list[str] | None = None) -> int:
         )
 
         _print_field_position_queue(rows)
+        if auto_seeded_games:
+            print(f"\nAuto-seeded {auto_seeded_games} games from prior confirmed team-prefix memory.")
         print(f"\nDetected {len(prefix_rows)} prefix rows across {len(rows)} queued games for plays run {source_plays_run_id}.")
         if args.review:
             return _run_field_position_review_loop(conn, prefix_rows, args.season, source_plays_run_id)
