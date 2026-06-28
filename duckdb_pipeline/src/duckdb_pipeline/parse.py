@@ -8,6 +8,13 @@ from bs4 import BeautifulSoup
 from .constants import BASE_URL
 
 
+def _parse_matchup_teams_from_label(label: str) -> tuple[str, str] | None:
+    match = re.search(r":\s+(.+?)\s+(?:vs\.|at)\s+(.+?)(?::\s+@|:\s+Box Score|$)", label)
+    if not match:
+        return None
+    return match.group(1).strip(), match.group(2).strip()
+
+
 def parse_standings_html(html: str, season: str, run_id: str) -> list[dict[str, str]]:
     soup = BeautifulSoup(html, "html.parser")
     teams: list[dict[str, str]] = []
@@ -95,6 +102,16 @@ def parse_schedule_html(html: str, team: dict[str, str], season: str, run_id: st
         result = result_cell.get_text(strip=True) if result_cell else ""
 
         pbp_url = href.rstrip("?") + "?view=plays"
+        if "neutral" in classes:
+            aria_label = link.get("aria-label", "")
+            matchup = _parse_matchup_teams_from_label(aria_label)
+            if matchup is not None:
+                first_team, second_team = matchup
+                if second_team == team["team_name"]:
+                    home_away = "home"
+                elif first_team == team["team_name"]:
+                    home_away = "away"
+
         if home_away == "home":
             home_name, away_name = team["team_name"], opponent
         else:
@@ -133,6 +150,8 @@ def build_games_rows(schedule_rows: list[dict[str, str]], season: str, run_id: s
         seen_names: set[str] = set()
         home_candidates: list[str] = []
         away_candidates: list[str] = []
+        schedule_home_values: set[str] = set()
+        schedule_away_values: set[str] = set()
 
         for row in rows:
             team_name = (row.get("team_name") or "").strip()
@@ -144,6 +163,12 @@ def build_games_rows(schedule_rows: list[dict[str, str]], season: str, run_id: s
                 home_candidates.append(team_name)
             elif home_away == "away" and team_name:
                 away_candidates.append(team_name)
+            schedule_home = (row.get("schedule_home") or "").strip()
+            schedule_away = (row.get("schedule_away") or "").strip()
+            if schedule_home:
+                schedule_home_values.add(schedule_home)
+            if schedule_away:
+                schedule_away_values.add(schedule_away)
 
         team_1 = canonical_names[0] if len(canonical_names) > 0 else ""
         team_2 = canonical_names[1] if len(canonical_names) > 1 else ""
@@ -151,6 +176,16 @@ def build_games_rows(schedule_rows: list[dict[str, str]], season: str, run_id: s
         row_count = len(rows)
         home_team_canonical = home_candidates[0] if len(home_candidates) == 1 else ""
         away_team_canonical = away_candidates[0] if len(away_candidates) == 1 else ""
+        valid_teams = {team for team in (team_1, team_2) if team}
+
+        if not home_team_canonical and len(schedule_home_values) == 1:
+            only_home = next(iter(schedule_home_values))
+            if only_home in valid_teams:
+                home_team_canonical = only_home
+        if not away_team_canonical and len(schedule_away_values) == 1:
+            only_away = next(iter(schedule_away_values))
+            if only_away in valid_teams:
+                away_team_canonical = only_away
 
         if unique_team_count == 2 and row_count == 2:
             pairing_status = "paired"

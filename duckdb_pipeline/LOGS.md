@@ -51,6 +51,23 @@
 - Removed the accidental nested `duckdb_pipeline/duckdb_pipeline/data/` path created by the earlier relative DB path.
 - Updated the default DB path logic so the database resolves to the subproject's own `data/foothill.duckdb` regardless of the current working directory.
 
+### Neutral-site schedule fix
+- Investigated six paired games with blank `home_team_canonical` / `away_team_canonical`.
+- Confirmed the affected schedule pages used `neutral` event rows with wording like `Team A vs. Team B @ site`.
+- Updated the schedule parser to infer home/away from the box-score `aria-label` for `neutral` rows.
+- Added a second safety fallback in `build_games_rows()` that uses consistent `schedule_home` / `schedule_away` values when canonical home/away are still blank.
+- Added parser tests covering neutral-site schedule handling and canonical home/away fallback.
+
+### Fresh validation rerun
+- Re-ran the full `2025-26` structure scrape after the neutral-row fix.
+- Completed run ID: `471e4a97-8818-40b4-822e-93cf8134dc02`
+- Verified counts:
+  - `standings = 66`
+  - `schedule = 694`
+  - `games = 347`
+- Verified all `347` games are `paired`.
+- Verified `0` paired games have blank `home_team_canonical` or `away_team_canonical`.
+
 ### Next recommended step
 - Before the next clean scrape, either:
   - delete the current DuckDB file and rerun, or

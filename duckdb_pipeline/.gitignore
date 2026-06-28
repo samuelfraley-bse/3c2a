@@ -6,3 +6,4 @@ data/*.wal
 src/*.egg-info/
 src/**/*.egg-info/
 tests/__pycache__/
+debug_*.html

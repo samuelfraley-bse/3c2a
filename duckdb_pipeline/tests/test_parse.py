@@ -54,6 +54,25 @@ SCHEDULE_AWAY_HTML = """
 </html>
 """
 
+SCHEDULE_NEUTRAL_HOME_HTML = """
+<html>
+  <body>
+    <table>
+      <tr class="event-row neutral regional result has-recap">
+        <td>
+          <a
+            href="/sports/fball/2025-26/boxscores/20250906_u5wl.xml"
+            aria-label="Football event: September 6 01:00 PM: Cabrillo vs. Chabot: @ Hayward, CA: Box Score"
+          >Box</a>
+        </td>
+        <td class="team opponent"><span class="team-name">Cabrillo</span></td>
+        <td class="result">W, 21-14</td>
+      </tr>
+    </table>
+  </body>
+</html>
+"""
+
 
 class ParseTests(unittest.TestCase):
     def test_parse_standings_html(self) -> None:
@@ -125,6 +144,56 @@ class ParseTests(unittest.TestCase):
         ]
         games = build_games_rows(schedule_rows, "2025-26", "run-1")
         self.assertEqual(games[0]["pairing_status"], "single-sided")
+
+    def test_parse_schedule_neutral_vs_row_sets_home_team_from_label(self) -> None:
+        team = {
+            "run_id": "run-1",
+            "season": "2025-26",
+            "team_name": "Chabot",
+            "team_id": "303",
+            "schedule_url": "https://example.com/chabot",
+        }
+        rows = parse_schedule_html(SCHEDULE_NEUTRAL_HOME_HTML, team, "2025-26", "run-1")
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["home_away"], "home")
+        self.assertEqual(rows[0]["schedule_home"], "Chabot")
+        self.assertEqual(rows[0]["schedule_away"], "Cabrillo")
+
+    def test_build_games_rows_falls_back_to_consistent_schedule_home_away(self) -> None:
+        schedule_rows = [
+            {
+                "run_id": "run-1",
+                "season": "2025-26",
+                "team_name": "Chabot",
+                "team_id": "303",
+                "game_id": "20250906_u5wl",
+                "game_date": "20250906",
+                "home_away": "neutral",
+                "opponent": "Cabrillo",
+                "result": "W, 21-14",
+                "pbp_url": "https://example.com",
+                "schedule_home": "Chabot",
+                "schedule_away": "Cabrillo",
+            },
+            {
+                "run_id": "run-1",
+                "season": "2025-26",
+                "team_name": "Cabrillo",
+                "team_id": "404",
+                "game_id": "20250906_u5wl",
+                "game_date": "20250906",
+                "home_away": "neutral",
+                "opponent": "Chabot",
+                "result": "L, 14-21",
+                "pbp_url": "https://example.com",
+                "schedule_home": "Chabot",
+                "schedule_away": "Cabrillo",
+            },
+        ]
+        games = build_games_rows(schedule_rows, "2025-26", "run-1")
+        self.assertEqual(games[0]["pairing_status"], "paired")
+        self.assertEqual(games[0]["home_team_canonical"], "Chabot")
+        self.assertEqual(games[0]["away_team_canonical"], "Cabrillo")
 
 
 if __name__ == "__main__":
