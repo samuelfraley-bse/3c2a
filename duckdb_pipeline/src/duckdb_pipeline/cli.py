@@ -148,6 +148,20 @@ def _load_plays_rows(conn, season: str, source_plays_run_id: str) -> list[dict[s
     return [dict(zip(columns, row)) for row in cursor.fetchall()]
 
 
+def _load_raw_pbp_rows(conn, season: str, source_plays_run_id: str) -> list[dict[str, object]]:
+    cursor = conn.execute(
+        """
+        SELECT *
+        FROM raw_pbp_html
+        WHERE season = ? AND run_id = ?
+        ORDER BY game_id
+        """,
+        [season, source_plays_run_id],
+    )
+    columns = [column[0] for column in cursor.description]
+    return [dict(zip(columns, row)) for row in cursor.fetchall()]
+
+
 def _resolve_plays_run_id(conn, season: str, source_plays_run_id: str | None) -> str:
     if source_plays_run_id:
         row = conn.execute(
@@ -562,6 +576,81 @@ def main_plays(argv: list[str] | None = None) -> int:
         log(f"STOP  run_id={run_id} -> interrupted by user")
         print("Run interrupted by user.", file=sys.stderr)
         return 130
+    except Exception as exc:
+        _finish_failed_run(conn, run_id, exc)
+        log(f"FAIL  run_id={run_id} -> {exc}")
+        print(f"Run failed: {exc}", file=sys.stderr)
+        return 1
+    finally:
+        conn.close()
+
+
+def main_rebuild_plays_from_raw(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Re-parse stored raw play-by-play HTML into a fresh plays run.")
+    parser.add_argument("--season", default=DEFAULT_SEASON)
+    parser.add_argument("--db-path", default=DEFAULT_DB_PATH)
+    parser.add_argument("--source-plays-run-id", default=None)
+    args = parser.parse_args(argv)
+
+    from .db import connect, init_db, insert_rows
+    from .parse import parse_pbp_html
+
+    run_id = str(uuid.uuid4())
+    conn = connect(args.db_path)
+    init_db(conn)
+    _insert_running_run(conn, run_id, args.season)
+
+    try:
+        source_plays_run_id = _resolve_plays_run_id(conn, args.season, args.source_plays_run_id)
+        structure_run_id = _resolve_structure_run_id_for_plays_run(conn, source_plays_run_id)
+        games_rows = _load_games_rows(conn, args.season, structure_run_id)
+        games_by_id = {str(row["game_id"]): row for row in games_rows}
+        raw_rows = _load_raw_pbp_rows(conn, args.season, source_plays_run_id)
+        if not raw_rows:
+            raise RuntimeError(
+                f"No raw_pbp_html rows found for season={args.season} plays_run_id={source_plays_run_id}"
+            )
+
+        log(
+            f"RUN   started reparse season={args.season} db={args.db_path} "
+            f"source_plays_run_id={source_plays_run_id}"
+        )
+        log(
+            f"BEGIN reparse season={args.season} run_id={run_id} "
+            f"source_plays_run_id={source_plays_run_id}"
+        )
+        log("STAGE reparse")
+
+        plays_rows: list[dict[str, object]] = []
+        for index, raw_row in enumerate(raw_rows, start=1):
+            game_id = str(raw_row["game_id"])
+            game = games_by_id.get(game_id)
+            if game is None:
+                raise RuntimeError(
+                    f"Could not find canonical games row for game_id={game_id} "
+                    f"from structure run {structure_run_id}"
+                )
+            parsed_rows = parse_pbp_html(str(raw_row["html_text"]), game, args.season, run_id)
+            plays_rows.extend(parsed_rows)
+            log(f"PARSE reparse [{index}/{len(raw_rows)}] {game_id} -> {len(parsed_rows)} rows")
+
+        insert_rows(conn, "plays", plays_rows)
+        _finish_completed_run(
+            conn,
+            run_id,
+            notes=json.dumps(
+                {
+                    "source_run_id": structure_run_id,
+                    "reparsed_from_plays_run_id": source_plays_run_id,
+                    "raw_pbp_count": len(raw_rows),
+                    "plays_count": len(plays_rows),
+                },
+                sort_keys=True,
+            ),
+        )
+        log(f"WRITE reparse raw_pbp={len(raw_rows)} plays={len(plays_rows)}")
+        log(f"DONE  run_id={run_id} db={args.db_path}")
+        return 0
     except Exception as exc:
         _finish_failed_run(conn, run_id, exc)
         log(f"FAIL  run_id={run_id} -> {exc}")

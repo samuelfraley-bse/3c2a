@@ -279,6 +279,9 @@ class ParseTests(unittest.TestCase):
         self.assertEqual(rush["offense"], "Foothill")
         self.assertEqual(rush["defense"], "San Mateo")
         self.assertEqual(rush["yardline_raw"], 25)
+        self.assertFalse(rush["is_dropback"])
+        self.assertFalse(rush["is_pass_attempt"])
+        self.assertTrue(rush["is_rush_attempt"])
 
         completion = rows[1]
         self.assertEqual(completion["play_type"], "pass")
@@ -286,6 +289,9 @@ class ParseTests(unittest.TestCase):
         self.assertEqual(completion["receiver"], "Alex Ray")
         self.assertEqual(completion["pass_result"], "complete")
         self.assertTrue(completion["completion"])
+        self.assertTrue(completion["is_dropback"])
+        self.assertTrue(completion["is_pass_attempt"])
+        self.assertFalse(completion["is_rush_attempt"])
 
         penalty = rows[2]
         self.assertEqual(penalty["play_type"], "penalty")
@@ -308,6 +314,78 @@ class ParseTests(unittest.TestCase):
             "Amare' Cooper pass complete to Rhys Cooper for 14 yards to the REEDLEY44 (Christian Phill).",
         )
         self.assertEqual(rows[0]["receiver"], "Rhys Cooper")
+
+    def test_parse_play_sack_is_dropback_and_rush_attempt(self) -> None:
+        game = {
+            "game_id": "20250920_47d4",
+            "schedule_home": "Foothill",
+            "schedule_away": "Sierra",
+            "home_team_canonical": "Foothill",
+            "away_team_canonical": "Sierra",
+        }
+        html = """
+        <html>
+          <head>
+            <meta property="og:title" content="Foothill vs. Sierra - Box Score - 9/20/2025" />
+            <link rel="canonical" href="https://3c2asports.org/sports/fball/2025-26/boxscores/20250920_47d4.xml?view=plays" />
+          </head>
+          <body>
+            <table>
+              <tr><td id="qtr1">1st Quarter</td></tr>
+              <tr><th colspan="2">Foothill at 12:34</th></tr>
+              <tr>
+                <td>2nd and 10 at FOOTHILL25</td>
+                <td>James Maxwell sacked for loss of 14 yards to the FOOTHILL11 (Von Edwards).</td>
+              </tr>
+            </table>
+          </body>
+        </html>
+        """
+        rows = parse_pbp_html(html, game, "2025-26", "run-4")
+        self.assertEqual(len(rows), 1)
+        sack = rows[0]
+        self.assertEqual(sack["play_type"], "pass")
+        self.assertTrue(sack["is_sack"])
+        self.assertTrue(sack["is_dropback"])
+        self.assertFalse(sack["is_pass_attempt"])
+        self.assertTrue(sack["is_rush_attempt"])
+        self.assertFalse(sack["completion"])
+        self.assertEqual(sack["yards_gained"], -14)
+
+    def test_parse_play_interception_return_fumble_keeps_zero_pass_yards(self) -> None:
+        game = {
+            "game_id": "20251011_cdcb",
+            "schedule_home": "Allan Hancock",
+            "schedule_away": "Ventura",
+            "home_team_canonical": "Allan Hancock",
+            "away_team_canonical": "Ventura",
+        }
+        html = """
+        <html>
+          <head>
+            <meta property="og:title" content="Allan Hancock vs. Ventura - Box Score - 10/11/2025" />
+            <link rel="canonical" href="https://3c2asports.org/sports/fball/2025-26/boxscores/20251011_cdcb.xml?view=plays" />
+          </head>
+          <body>
+            <table>
+              <tr><td id="qtr4">4th Quarter</td></tr>
+              <tr><th colspan="2">Ventura at 02:01</th></tr>
+              <tr>
+                <td>2nd and 10 at ALLAN HA48</td>
+                <td>Devin Tate pass intercepted by Justyce Roserie at the ALLAN HA07, Justyce Roserie return 52 yards to the VENTURA41, fumble forced by Tayvion McCoy, fumble by Justyce Roserie recovered by ALLAN HA Justyce Roserie at VENTURA43.</td>
+              </tr>
+            </table>
+          </body>
+        </html>
+        """
+        rows = parse_pbp_html(html, game, "2025-26", "run-5")
+        self.assertEqual(len(rows), 1)
+        interception = rows[0]
+        self.assertEqual(interception["play_type"], "pass")
+        self.assertTrue(interception["is_interception"])
+        self.assertTrue(interception["is_pass_attempt"])
+        self.assertFalse(interception["completion"])
+        self.assertEqual(interception["yards_gained"], 0)
 
 
 if __name__ == "__main__":

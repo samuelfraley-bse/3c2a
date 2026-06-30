@@ -20,6 +20,15 @@ def connect(db_path: str):
     return _duckdb_module().connect(str(path))
 
 
+def _ensure_column(conn, table: str, column: str, column_type: str) -> None:
+    existing = {
+        row[1]
+        for row in conn.execute(f"PRAGMA table_info('{table}')").fetchall()
+    }
+    if column not in existing:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {column_type}")
+
+
 def init_db(conn) -> None:
     conn.execute(
         """
@@ -146,6 +155,8 @@ def init_db(conn) -> None:
             yards_gained INTEGER,
             is_dropback BOOLEAN,
             is_attempt BOOLEAN,
+            is_pass_attempt BOOLEAN,
+            is_rush_attempt BOOLEAN,
             completion BOOLEAN,
             is_interception BOOLEAN,
             is_td BOOLEAN,
@@ -244,6 +255,8 @@ def init_db(conn) -> None:
         )
         """
     )
+    _ensure_column(conn, "plays", "is_pass_attempt", "BOOLEAN")
+    _ensure_column(conn, "plays", "is_rush_attempt", "BOOLEAN")
 
 
 def fetch_all(conn, sql: str, params: list[Any] | None = None) -> list[tuple[Any, ...]]:

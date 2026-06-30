@@ -41,6 +41,12 @@ class DbTests(unittest.TestCase):
             self.assertIn("field_position_prefixes", tables)
             self.assertIn("field_position_crosswalk", tables)
             self.assertIn("play_field_positions", tables)
+            play_columns = {
+                row[1]
+                for row in conn.execute("PRAGMA table_info('plays')").fetchall()
+            }
+            self.assertIn("is_pass_attempt", play_columns)
+            self.assertIn("is_rush_attempt", play_columns)
             conn.close()
 
 

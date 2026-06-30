@@ -130,6 +130,38 @@ This keeps:
 - manual decisions auditable in `field_position_crosswalk`
 - derived field-position data rebuildable when logic changes
 
+## Team-stat accounting note
+
+For future team-level offensive aggregates, the working rule is:
+
+- official rushing totals should include sacks
+- dropback context should still treat sacks as pass-play outcomes
+
+That means the next aggregate layer should likely expose both:
+
+- official/accounting flags such as `is_rush_att`
+- context flags such as `is_dropback`
+
+Expected interpretation:
+
+- `play_type = 'rush' and not is_sack` -> designed run
+- `play_type = 'pass'` -> pass attempt
+- `is_sack = true` -> sack
+- `is_rush_att = true` for `rush` plays and sacks, so team rushing matches the source box score
+- `is_dropback = true` for pass attempts and sacks, so pass-game context stays analytically useful
+
+The current explicit `plays`-level flag split is:
+
+- `is_dropback`: pass-play context, including sacks
+- `is_pass_attempt`: official forward pass attempts only
+- `is_rush_attempt`: official team rushing attempts, including sacks
+
+So a sack should read as:
+
+- `is_dropback = true`
+- `is_pass_attempt = false`
+- `is_rush_attempt = true`
+
 ## Review queue workflow
 
 For in-season use, the intended operator flow is:

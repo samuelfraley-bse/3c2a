@@ -213,3 +213,159 @@ uv run --active python -m unittest discover tests
 - Takeaway:
   - the crosswalk covered every row that actually carried a resolvable field-position token
   - the remaining unresolved count is normal pipeline residue, not a mapping failure
+
+### Team-level rushing accounting decision
+- Spot-checked Foothill's season rushing totals from the completed `2025-26` plays run against the official online box-score total.
+- Parsed totals using only `play_type = 'rush'` produced:
+  - `375` rushing attempts
+  - `1723` rushing yards
+  - `12` rushing touchdowns
+- Official site total was:
+  - `408` rushing attempts
+  - `1520` rushing yards
+  - `12` rushing touchdowns
+- The gap reconciled exactly once sacks were included:
+  - `33` sacks
+  - `-203` sack yards
+  - `375 + 33 = 408` rush attempts
+  - `1723 - 203 = 1520` rush yards
+- Schema decision going forward:
+  - official team rushing should include sacks
+  - play-level context should still distinguish:
+    - designed runs
+    - dropback passes
+    - sacks
+- Planned derived flags for downstream aggregates:
+  - `is_rush_att` for official rushing attempts, including sacks
+  - `is_dropback` for pass attempts and sacks
+  - keep `play_type = 'rush' and not is_sack` as the designed-run slice
+- Rationale:
+  - this preserves exact reconciliation with official box scores
+  - while still keeping cleaner contextual features for later analytics
+
+### Dropback / pass-attempt / rush-attempt split
+- Updated the `plays` schema to add explicit derived attempt flags:
+  - `is_pass_attempt`
+  - `is_rush_attempt`
+- Kept `is_dropback` as the play-context flag.
+- Confirmed intended sack behavior:
+  - `is_dropback = true`
+  - `is_pass_attempt = false`
+  - `is_rush_attempt = true`
+  - `is_sack = true`
+- This reflects the intended accounting split:
+  - sacks belong to pass-play context
+  - sacks do not count as official pass attempts
+  - sacks do count toward official team rushing attempts and rushing yards
+- Ran a one-time backfill on the existing full-season `plays` rows so the new columns were populated for historical data already stored in DuckDB.
+- Foothill validation after backfill for plays run `3e4103ae-62c3-4195-9c45-71df4fcc23ce`:
+  - `dropbacks = 303`
+  - `pass_attempts = 270`
+  - `rush_attempts = 408`
+  - `sacks = 33`
+- Sample sack rows now correctly show:
+  - `play_type = 'pass'`
+  - `is_dropback = true`
+  - `is_pass_attempt = false`
+  - `is_rush_attempt = true`
+
+### Team-stat validation order
+- Decided to validate season team offense in two passes instead of treating every mismatch the same.
+- Validation pass 1:
+  - check coverage first
+  - compare scheduled game count versus distinct play-by-play game count by team
+  - use this to identify teams that are probably missing one or more logged games entirely
+- Validation pass 2:
+  - only after coverage is understood, inspect teams with full game counts but remaining stat mismatches
+  - these are the better parser/accounting audit targets because missing PBP coverage is no longer a confounder
+- Current examples:
+  - missing-game-coverage checks are useful for teams like `Reedley`, `Riverside`, `Sequoias`, and others that appear short on distinct PBP games
+  - full-coverage stat-mismatch checks are more appropriate for teams like `Ventura`, `Long Beach`, and `San Francisco`
+- Immediate operator workflow:
+  - list the exact games currently present in DuckDB for a team
+  - compare those games against the official season schedule or stat page
+  - identify whether the discrepancy is a missing game versus an accounting mismatch inside covered games
+
+### Missing-PBP opponent pattern
+- After fixing `pbp_url` construction to use canonical season-level boxscore paths built from `season + game_id`, several teams recovered to full play-by-play coverage.
+- Remaining missing-game checks now appear to surface source-availability patterns more than scraper-path bugs.
+- First confirmed example:
+  - `Hartnell` appears as the opponent in `6` still-missing games
+- Enumerated missing Hartnell-involved game IDs:
+  - `20250830_l13b` — `Hartnell vs Chabot`
+  - `20250913_cupn` — `Hartnell vs Los Medanos`
+  - `20250920_33gi` — `Feather River vs Hartnell`
+  - `20250927_2b9n` — `Hartnell vs Contra Costa`
+  - `20251025_3ap7` — `Hartnell vs Merced`
+  - `20251108_t19u` — `Hartnell vs Gavilan`
+- Interpretation:
+  - this no longer looks like six unrelated parser misses
+  - it looks like a Hartnell-centered low- or no-PBP coverage pattern in the source data
+- Next diagnostic path:
+  - repeat the same missing-game breakdown for other high-frequency missing opponents such as `Feather River` and `Gavilan`
+  - maintain a running list of likely low-PBP-coverage schools so future aggregate mismatches can be interpreted correctly
+
+### Low-PBP coverage cluster
+- Follow-up missing-game breakdowns suggest that some of the remaining gaps are better understood as a source-coverage cluster rather than isolated one-off misses.
+- Confirmed overlapping missing-game patterns:
+  - `Hartnell`
+  - `Feather River`
+  - `Gavilan`
+  - `Siskiyous`
+- Supporting examples:
+  - `Feather River` missing-game set includes games versus `Gavilan`, `Hartnell`, `Cabrillo`, and `Siskiyous`
+  - `Gavilan` missing-game set includes games versus `Siskiyous`, `Feather River`, `San Joaquin Delta`, and `Hartnell`
+- Interpretation:
+  - remaining missing play-by-play coverage is not purely school-by-school
+  - some schools appear in a small low-coverage network where games involving either side are more likely to have no usable PBP
+- Practical validation takeaway:
+  - when a team's season totals are short by exactly one or a few games, check whether the missing opponent falls inside this low-coverage cluster before assuming a parsing bug
+- Additional one-off checks reinforced the same cluster interpretation:
+  - `Cabrillo`'s remaining missing game is against `Feather River`
+  - `San Joaquin Delta`'s remaining missing game is against `Gavilan`
+- This suggests some apparent single-school one-off gaps are really edges of the same low-PBP network rather than independent failures.
+
+## 2026-06-30
+
+### Interception return yardage bug found
+- While reconciling Ventura team passing against the official season log, identified a play-level accounting bug in:
+  - `20251011_cdcb` (`Ventura at Allan Hancock`)
+- Symptom:
+  - official Ventura passing for the game was `11-22-1` for `173` yards
+  - DuckDB matched attempts, completions, interceptions, and touchdowns, but only produced `132` passing yards
+- Root cause:
+  - an intercepted pass was correctly parsed as:
+    - `is_pass_attempt = true`
+    - `completion = false`
+    - `is_interception = true`
+    - `yards_gained = 0`
+  - but later in `parse_pbp_html()`, the generic fumble-recovery yardage adjustment overwrote that with `-41`
+  - the trigger was an interception return that itself ended with a defensive fumble/recovery, causing the parser to treat the defender return location as offensive pass yardage
+- Fix direction:
+  - keep offensive pass yardage at `0` for intercepted passes
+  - skip the fumble-based yardage rewrite when the parsed play is already marked `is_interception`
+- Why this matters:
+  - the same pattern can appear in other games
+  - this is a clean parser/accounting bug, not a scraping coverage issue
+- Data refresh note:
+  - this fix should only require re-parsing from stored `raw_pbp_html`
+  - no re-scrape should be needed unless the raw source itself was missing
+
+### Offensive yardage semantics
+- Clarified the intended meaning of offensive `yards_gained` for team-stat reconciliation.
+- Rule:
+  - offensive yardage should stop at the point where possession changes
+  - any later return yards belong to the return event, not to offensive production
+- Confirmed implications:
+  - offensive pass yards are always `0` on any interception
+  - interception return yards should not count as offensive passing yards
+  - interception-return fumble yards should not count as offensive passing yards either
+  - fumble return yards after an offensive fumble should not add to offensive rushing or passing totals
+- Practical interpretation:
+  - the offense keeps only the gain/loss up to the turnover spot
+  - post-turnover movement is separate context for later analysis, not part of team offense
+- Parser consequence:
+  - once a play is classified as a turnover event, downstream return/recovery location text must not overwrite offensive `yards_gained`
+- Why this breadcrumb matters:
+  - it gives a stable accounting rule for future parser edge cases
+  - it keeps team rushing, passing, and total offense aligned with official box-score semantics

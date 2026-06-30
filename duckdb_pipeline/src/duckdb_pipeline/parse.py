@@ -143,6 +143,8 @@ def normalize_play_text(text: str) -> str:
 def _stamp_pass_flags(play: dict[str, object]) -> None:
     play["is_dropback"] = True
     play["is_attempt"] = not play["is_sack"]
+    play["is_pass_attempt"] = not play["is_sack"]
+    play["is_rush_attempt"] = bool(play["is_sack"])
     play["completion"] = play["pass_result"] == "complete"
     play["is_interception"] = play["pass_result"] == "int"
 
@@ -151,6 +153,14 @@ def _team_matches(team_name: str, drive_token: str) -> bool:
     team = _norm(team_name)
     drive = _norm(drive_token)
     return bool(team) and bool(drive) and (team in drive or drive in team)
+
+
+def build_boxscore_url(season: str, game_id: str) -> str:
+    return f"{BASE_URL}/sports/fball/{season}/boxscores/{game_id}.xml"
+
+
+def build_pbp_url(season: str, game_id: str) -> str:
+    return f"{build_boxscore_url(season, game_id)}?view=plays"
 
 
 def field_pos_to_abs(token: str, offense: str | None) -> int | None:
@@ -179,6 +189,8 @@ def parse_play(text: str) -> dict[str, object]:
         "yards_gained": None,
         "is_dropback": False,
         "is_attempt": False,
+        "is_pass_attempt": False,
+        "is_rush_attempt": False,
         "completion": False,
         "is_interception": False,
         "is_td": bool(RE_TD.search(text)) and not bool(RE_INT.search(text)),
@@ -333,6 +345,7 @@ def parse_play(text: str) -> dict[str, object]:
         play["play_type"] = "rush"
         play["rusher"] = clean_player(rush.group(1))
         play["yards_gained"] = parse_yards(text)
+        play["is_rush_attempt"] = True
         play["is_td"] = bool(RE_TD.search(text)) and not bool(play["is_fumble"])
         play["tackler_1"], play["tackler_2"] = parse_tacklers(text)
         return play
@@ -428,7 +441,7 @@ def parse_schedule_html(html: str, team: dict[str, str], season: str, run_id: st
         result_cell = row.select_one("td.result")
         result = result_cell.get_text(strip=True) if result_cell else ""
 
-        pbp_url = href.rstrip("?") + "?view=plays"
+        pbp_url = build_pbp_url(season, game_id)
         if "neutral" in classes:
             aria_label = link.get("aria-label", "")
             matchup = _parse_matchup_teams_from_label(aria_label)
@@ -649,7 +662,7 @@ def parse_pbp_html(html: str, game: dict[str, str], season: str, run_id: str) ->
         play_id += 1
         parsed = parse_play(play_text)
 
-        if parsed.get("is_fumble") and field_position:
+        if parsed.get("is_fumble") and field_position and not parsed.get("is_interception"):
             recovery_loc = parsed.pop("_fumble_recovery_loc", None)
             start = field_pos_to_abs(field_position, offense)
             end = field_pos_to_abs(recovery_loc, offense) if recovery_loc else None
@@ -657,6 +670,10 @@ def parse_pbp_html(html: str, game: dict[str, str], season: str, run_id: str) ->
                 parsed["yards_gained"] = end - start
         else:
             parsed.pop("_fumble_recovery_loc", None)
+
+        # Interceptions never earn offensive passing yards in this source format.
+        if parsed.get("is_interception"):
+            parsed["yards_gained"] = 0
 
         yardline_raw = None
         if field_position:
