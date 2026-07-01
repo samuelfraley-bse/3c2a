@@ -68,7 +68,9 @@ RE_INT = re.compile(r"intercept", re.IGNORECASE)
 RE_TIMEOUT = re.compile(r"^Timeout\s", re.IGNORECASE)
 RE_CLOCK_ONLY = re.compile(r"^clock\s+\d+:\d+\.$", re.IGNORECASE)
 RE_FUMBLE = re.compile(
-    r"fumble by\s+(\w[\w\s\-'\.]+?)\s+recovered by\s+(\w+)\s+(\w[\w\s\-'\.]+?)\s+at\s+([A-Z][A-Z0-9\s\.\-_]*?\d+)",
+    r"fumble by\s+(\w[\w\s\-'\.]+?)\s+recovered by\s+"
+    r"([A-Z][A-Z0-9\.\-_]*(?:\s+[A-Z][A-Z0-9\.\-_]*)*)\s+"
+    r"([A-Z][a-z][\w\s\-'\.]+?)\s+at\s+([A-Z][A-Z0-9\s\.\-_]*?\d+)",
     re.IGNORECASE,
 )
 RE_FIELD_POS = re.compile(r"^([A-Z][A-Z0-9\s\.\-_]*?)(\d+)$")
@@ -165,6 +167,22 @@ def _team_matches(team_name: str, drive_token: str) -> bool:
     team = _norm(team_name)
     drive = _norm(drive_token)
     return bool(team) and bool(drive) and (team in drive or drive in team)
+
+
+def _team_prefix_matches(team_name: str, recovered_text: str) -> bool:
+    team_tokens = re.findall(r"[A-Za-z0-9]+", team_name.lower())
+    recovered_tokens = re.findall(r"[A-Za-z0-9]+", recovered_text.lower())
+    if not team_tokens or not recovered_tokens:
+        return False
+    common = 0
+    for team_token, recovered_token in zip(team_tokens, recovered_tokens):
+        if team_token == recovered_token:
+            common += 1
+        else:
+            break
+    if len(team_tokens) == 1:
+        return common >= 1
+    return common >= 2 or common == len(team_tokens)
 
 
 def _resolve_possession_from_text(
@@ -721,6 +739,16 @@ def parse_pbp_html(html: str, game: dict[str, str], season: str, run_id: str) ->
         # Interceptions never earn offensive passing yards in this source format.
         if parsed.get("is_interception"):
             parsed["yards_gained"] = 0
+
+        recovered_by = parsed.get("fumble_recovered_by")
+        if (
+            parsed.get("is_fumble")
+            and parsed.get("is_td")
+            and isinstance(recovered_by, str)
+            and defense
+            and (_team_matches(defense, recovered_by) or _team_prefix_matches(defense, recovered_by))
+        ):
+            parsed["is_td"] = False
 
         yardline_raw = None
         if field_position:

@@ -52,7 +52,7 @@ This file is the quick operator ledger for important DuckDB pipeline runs.
   - status: completed
   - reparsed_from_plays_run_id: `75e20b24-e705-463c-b966-59d32dd2d361`
   - counts: `347 raw_pbp`, `55853 plays`
-  - note: current best full reparse after try-play semantics change; validated Ventura @ Palomar at `37/19/220/0/1`
+  - note: current best full reparse after try-play semantics change and defensive fumble-return TD fix; validated Ventura @ Palomar at `37/19/220/0/1` and Long Beach season passing at `393/220/3129/9/30`
 
 ### Field-position workflow checkpoints
 

@@ -476,6 +476,42 @@ class ParseTests(unittest.TestCase):
         self.assertEqual(play["yards_gained"], 0)
         self.assertEqual(play["fg_result"], "failed")
 
+    def test_parse_play_defensive_fumble_return_td_is_not_offensive_td(self) -> None:
+        game = {
+            "game_id": "20250906_t3z9",
+            "schedule_home": "Long Beach",
+            "schedule_away": "Mt. San Jacinto",
+            "home_team_canonical": "Long Beach",
+            "away_team_canonical": "Mt. San Jacinto",
+        }
+        html = """
+        <html>
+          <head>
+            <meta property="og:title" content="Long Beach vs. Mt. San Jacinto - Box Score - 9/6/2025" />
+            <link rel="canonical" href="https://3c2asports.org/sports/fball/2025-26/boxscores/20250906_t3z9.xml?view=plays" />
+          </head>
+          <body>
+            <table>
+              <tr><td id="qtr1">1st Quarter</td></tr>
+              <tr><th colspan="2">Long Beach at 00:56</th></tr>
+              <tr>
+                <td>2nd and 7 at LONG BEA01</td>
+                <td>Wyatt McCauley sacked for loss of 1 yard to the LONG BEA00 (Ifeanyi Onye), fumble by Wyatt McCauley recovered by MT. SAN Ifeanyi Onye at LONG BEA00, TOUCHDOWN, clock 00:56.</td>
+              </tr>
+            </table>
+          </body>
+        </html>
+        """
+        rows = parse_pbp_html(html, game, "2025-26", "run-8")
+        self.assertEqual(len(rows), 1)
+        play = rows[0]
+        self.assertEqual(play["play_type"], "pass")
+        self.assertTrue(play["is_sack"])
+        self.assertTrue(play["is_fumble"])
+        self.assertTrue(str(play["fumble_recovered_by"]).startswith("MT. SAN"))
+        self.assertEqual(play["yards_gained"], -1)
+        self.assertFalse(play["is_td"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -428,3 +428,25 @@ uv run --active python -m unittest discover tests
 - Takeaway:
   - the post-touchdown try is now retained as an event in `plays`
   - but it no longer leaks into standard passing/interception accounting
+
+### Defensive fumble-return touchdown fix
+- While validating Long Beach season passing totals, found one remaining extra passing touchdown.
+- The bad row was:
+  - `20250906_t3z9`
+  - `play_id 44`
+  - `Wyatt McCauley sacked for loss of 1 yard ... fumble ... recovered by MT. SAN ... TOUCHDOWN`
+- Root cause:
+  - sacks are intentionally kept as `play_type = 'pass'` for dropback context
+  - but the parser was letting a defensive fumble-return touchdown stay attached to the offensive row as `is_td = true`
+- Fix direction:
+  - when a fumble row ends in a touchdown and the recovery team matches the defense, clear offensive `is_td`
+  - keep offensive yards only to the turnover point
+- Additional hardening:
+  - widened the defensive-recovery team matching logic for source tokens like `MT. SAN ...`
+- Validation after reparse:
+  - Long Beach season passing now matches the official site exactly:
+    - `393` attempts
+    - `220` completions
+    - `3129` passing yards
+    - `9` interceptions
+    - `30` passing touchdowns
