@@ -414,3 +414,17 @@ uv run --active python -m unittest discover tests
   - it preserves the raw football event for context
   - it makes future audits easy if another try-format edge case appears
   - it keeps official team stat reconciliation correct by parsed-play semantics, not just downstream filtering
+
+### Conversion-try reparse validation
+- Rebuilt `plays` from stored `raw_pbp_html` after the try-play semantic change.
+- New completed reparse run:
+  - `85e57f9b-2363-4244-8d23-a1085093dcc7`
+- Confirmed the motivating Palomar check now matches the official team line exactly for `Ventura` in `20250830_fzzx`:
+  - `37` pass attempts
+  - `19` completions
+  - `220` passing yards
+  - `0` interceptions
+  - `1` passing touchdown
+- Takeaway:
+  - the post-touchdown try is now retained as an event in `plays`
+  - but it no longer leaks into standard passing/interception accounting

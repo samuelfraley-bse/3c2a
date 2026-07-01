@@ -48,6 +48,12 @@ This file is the quick operator ledger for important DuckDB pipeline runs.
     - `20251108_xpmu`
   - note: validated quarter-start embedded possession reset and zero-row reporting
 
+- `85e57f9b-2363-4244-8d23-a1085093dcc7`
+  - status: completed
+  - reparsed_from_plays_run_id: `75e20b24-e705-463c-b966-59d32dd2d361`
+  - counts: `347 raw_pbp`, `55853 plays`
+  - note: current best full reparse after try-play semantics change; validated Ventura @ Palomar at `37/19/220/0/1`
+
 ### Field-position workflow checkpoints
 
 - `3e4103ae-62c3-4195-9c45-71df4fcc23ce`
@@ -70,4 +76,4 @@ This file is the quick operator ledger for important DuckDB pipeline runs.
   - `4b573736-96bb-4939-8ea8-661f0e51ddfc`
 
 - `current best 2025-26 full reparse run`
-  - `9ef1d1d6-d9b0-4441-86d4-bedf315f0487`
+  - `85e57f9b-2363-4244-8d23-a1085093dcc7`
