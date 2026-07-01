@@ -450,3 +450,29 @@ uv run --active python -m unittest discover tests
     - `3129` passing yards
     - `9` interceptions
     - `30` passing touchdowns
+
+### Contradictory drive-label possession fix
+- While validating San Francisco season passing, found a fragile source-format issue in:
+  - `20250927_6pu6` (`San Francisco vs Sierra`)
+- Symptom:
+  - four real San Francisco completions were present in raw HTML but were not being credited to `offense = 'San Francisco'`
+  - the missing chunk was exactly:
+    - `4` completions
+    - `60` passing yards
+    - `1` passing touchdown
+- Root cause:
+  - the source emitted contradictory possession cues in this order:
+    - stale/bad drive header: `Sierra at 00:56`
+    - `Sierra drive start at 00:56.`
+    - `CCSF ball on CCSF40, clock 00:56.`
+    - `San Francisco drive start at 00:56.`
+  - the parser previously ignored explicit `Team drive start at ...` rows
+  - it also allowed unknown `TEAM ball on ...` tokens to overwrite offense with non-canonical junk like `CCSF`
+- Fix direction:
+  - treat explicit `Team drive start at ...` rows as authoritative possession resets
+  - keep drive headers as weaker hints only
+  - ignore unknown `TEAM ball on ...` abbreviations unless they map cleanly to the known home/away teams
+- Why this is an important weakness breadcrumb:
+  - the source can contradict itself mid-drive
+  - future failures may come from malformed possession labels rather than missing games
+  - this class of bug is a good candidate for later automated anomaly detection when raw HTML contains conflicting possession cues for the same timestamp

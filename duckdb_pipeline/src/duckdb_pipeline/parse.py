@@ -15,6 +15,7 @@ RE_DOWN_DIST = re.compile(
 RE_DRIVE_HEADER = re.compile(r"^(.+?)\s+at\s+(\d+:\d+)$")
 RE_QUARTER_START = re.compile(r"Start of (\d+)(?:st|nd|rd|th) quarter", re.IGNORECASE)
 RE_DRIVE_START = re.compile(r"drive start at (\d+:\d+)", re.IGNORECASE)
+RE_DRIVE_START_TEAM = re.compile(r"^(.+?)\s+drive start at\s+(\d+:\d+)\.?$", re.IGNORECASE)
 RE_RUSH = re.compile(r"(\w[\w\s\-'\.]+?)\s+rush for", re.IGNORECASE)
 RE_PASS_COMPLETE_A = re.compile(
     r"(\w[\w\s\-'\.]+?)\s+pass complete to\s+(\w[\w\s\-'\.]+?)\s+for",
@@ -200,7 +201,23 @@ def _resolve_possession_from_text(
         return home_team, away_team
     if match_away.upper().startswith(token) or token in match_away.upper():
         return away_team, home_team
-    return token, None
+    return None, None
+
+
+def _resolve_drive_start_possession(
+    text: str,
+    home_team: str,
+    away_team: str,
+) -> tuple[str | None, str | None]:
+    match = RE_DRIVE_START_TEAM.match(text)
+    if not match:
+        return None, None
+    drive_team = match.group(1).strip()
+    if _team_matches(home_team, drive_team):
+        return home_team, away_team
+    if _team_matches(away_team, drive_team):
+        return away_team, home_team
+    return None, None
 
 
 def build_boxscore_url(season: str, game_id: str) -> str:
@@ -667,6 +684,10 @@ def parse_pbp_html(html: str, game: dict[str, str], season: str, run_id: str) ->
         situation_text = normalize_play_text(cells[0].get_text(" ", strip=True))
         play_text = normalize_play_text(cells[1].get_text(" ", strip=True))
 
+        next_offense, next_defense = _resolve_drive_start_possession(play_text, home_team, away_team)
+        if next_offense:
+            offense, defense = next_offense, next_defense
+            continue
         if RE_DRIVE_START.search(play_text):
             continue
         quarter_match = RE_QUARTER_START.search(play_text)
@@ -691,6 +712,8 @@ def parse_pbp_html(html: str, game: dict[str, str], season: str, run_id: str) ->
         )
         if next_offense:
             offense, defense = next_offense, next_defense
+            continue
+        if re.search(r"\bball on\b", play_text, re.IGNORECASE):
             continue
         if not play_text or play_text == "\xa0":
             continue

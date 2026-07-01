@@ -437,6 +437,56 @@ class ParseTests(unittest.TestCase):
         self.assertTrue(rows[1]["completion"])
         self.assertEqual(rows[1]["yards_gained"], 6)
 
+    def test_parse_pbp_html_explicit_drive_start_overrides_bad_drive_header(self) -> None:
+        game = {
+            "game_id": "20250927_6pu6",
+            "schedule_home": "San Francisco",
+            "schedule_away": "Sierra",
+            "home_team_canonical": "San Francisco",
+            "away_team_canonical": "Sierra",
+        }
+        html = """
+        <html>
+          <body>
+            <table>
+              <tr><td id="qtr4">4th Quarter</td></tr>
+              <tr><th colspan="2">San Francisco at 01:06</th></tr>
+              <tr>
+                <td>4th and 21 at SJC34</td>
+                <td>Joel Bradley punt 26 yards to the CCSF40, downed.</td>
+              </tr>
+              <tr><th colspan="2">Sierra at 00:56</th></tr>
+              <tr>
+                <td>1st and 10 at CCSF40</td>
+                <td>Sierra drive start at 00:56.</td>
+              </tr>
+              <tr>
+                <td>1st and 10 at CCSF40</td>
+                <td>CCSF ball on CCSF40, clock 00:56.</td>
+              </tr>
+              <tr>
+                <td>1st and 10 at CCSF40</td>
+                <td>San Francisco drive start at 00:56.</td>
+              </tr>
+              <tr>
+                <td>1st and 10 at CCSF40</td>
+                <td>Darius Clark-Ja pass complete to Jeremiah Nash for 24 yards to the SJC36 (George Baker).</td>
+              </tr>
+            </table>
+          </body>
+        </html>
+        """
+        rows = parse_pbp_html(html, game, "2025-26", "run-6b")
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(rows[0]["play_type"], "punt")
+        self.assertEqual(rows[0]["offense"], "San Francisco")
+        self.assertEqual(rows[1]["play_type"], "pass")
+        self.assertEqual(rows[1]["offense"], "San Francisco")
+        self.assertEqual(rows[1]["defense"], "Sierra")
+        self.assertEqual(rows[1]["passer"], "Darius Clark-Ja")
+        self.assertEqual(rows[1]["receiver"], "Jeremiah Nash")
+        self.assertEqual(rows[1]["yards_gained"], 24)
+
     def test_parse_play_two_point_pass_attempt_is_conversion(self) -> None:
         game = {
             "game_id": "20250830_fzzx",
