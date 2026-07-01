@@ -561,7 +561,16 @@ def main_plays(argv: list[str] | None = None) -> int:
         )
         result = scrape_plays(games_rows, args.season, args.delay, run_id, source_run_id)
         insert_rows(conn, "raw_pbp_html", result["raw_pbp_rows"])
-        insert_rows(conn, "plays", result["plays_rows"])
+        log(f"WRITE plays insert start rows={len(result['plays_rows'])}")
+        insert_rows(
+            conn,
+            "plays",
+            result["plays_rows"],
+            chunk_size=5000,
+            progress_label="plays",
+            progress_logger=log,
+        )
+        log("WRITE plays insert done")
         insert_rows(conn, "failed_game_fetches", result["failed_rows"])
 
         _finish_completed_run(
@@ -622,6 +631,7 @@ def main_rebuild_plays_from_raw(argv: list[str] | None = None) -> int:
         log("STAGE reparse")
 
         plays_rows: list[dict[str, object]] = []
+        zero_play_game_ids: list[str] = []
         for index, raw_row in enumerate(raw_rows, start=1):
             game_id = str(raw_row["game_id"])
             game = games_by_id.get(game_id)
@@ -631,10 +641,23 @@ def main_rebuild_plays_from_raw(argv: list[str] | None = None) -> int:
                     f"from structure run {structure_run_id}"
                 )
             parsed_rows = parse_pbp_html(str(raw_row["html_text"]), game, args.season, run_id)
+            if not parsed_rows:
+                zero_play_game_ids.append(game_id)
+                log(f"EMPTY reparse {game_id} -> 0 plays parsed")
+                continue
             plays_rows.extend(parsed_rows)
             log(f"PARSE reparse [{index}/{len(raw_rows)}] {game_id} -> {len(parsed_rows)} rows")
 
-        insert_rows(conn, "plays", plays_rows)
+        log(f"WRITE reparse insert start rows={len(plays_rows)}")
+        insert_rows(
+            conn,
+            "plays",
+            plays_rows,
+            chunk_size=5000,
+            progress_label="reparse plays",
+            progress_logger=log,
+        )
+        log("WRITE reparse insert done")
         _finish_completed_run(
             conn,
             run_id,
@@ -649,6 +672,8 @@ def main_rebuild_plays_from_raw(argv: list[str] | None = None) -> int:
             ),
         )
         log(f"WRITE reparse raw_pbp={len(raw_rows)} plays={len(plays_rows)}")
+        if zero_play_game_ids:
+            log("ZERO  reparse parsed 0 plays for game_ids=" + ", ".join(zero_play_game_ids))
         log(f"DONE  run_id={run_id} db={args.db_path}")
         return 0
     except Exception as exc:

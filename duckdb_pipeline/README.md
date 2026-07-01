@@ -153,6 +153,7 @@ Expected interpretation:
 The current explicit `plays`-level flag split is:
 
 - `is_dropback`: pass-play context, including sacks
+- `is_conversion`: PAT / two-point try context, excluded from standard offensive passing and rushing totals
 - `is_pass_attempt`: official forward pass attempts only
 - `is_rush_attempt`: official team rushing attempts, including sacks
 
@@ -161,6 +162,16 @@ So a sack should read as:
 - `is_dropback = true`
 - `is_pass_attempt = false`
 - `is_rush_attempt = true`
+
+And a two-point pass try should read as:
+
+- `play_type = 'two_point'`
+- `is_conversion = true`
+- `is_dropback = false`
+- `is_pass_attempt = false`
+- `is_rush_attempt = false`
+
+That keeps try plays in the event log while ensuring they contribute no normal passing, rushing, or interception stats by construction.
 
 ## Review queue workflow
 

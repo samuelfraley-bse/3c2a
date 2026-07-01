@@ -85,6 +85,7 @@ PLAYS_FIELDS = [
     "yards_gained",
     "is_dropback",
     "is_attempt",
+    "is_conversion",
     "is_pass_attempt",
     "is_rush_attempt",
     "completion",

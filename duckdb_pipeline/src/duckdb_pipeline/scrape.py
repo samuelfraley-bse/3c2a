@@ -126,6 +126,7 @@ def scrape_plays(
     raw_pbp_rows: list[dict[str, object]] = []
     plays_rows: list[dict[str, object]] = []
     failed_rows: list[dict[str, object]] = []
+    zero_play_game_ids: list[str] = []
 
     total_games = len(games_rows)
     log(f"BEGIN plays season={season} run_id={run_id} source_run_id={source_run_id}")
@@ -179,6 +180,7 @@ def scrape_plays(
         )
         parsed_plays = parse_pbp_html(html, game, season, run_id)
         if not parsed_plays:
+            zero_play_game_ids.append(game_id)
             failed_rows.append(
                 {
                     "run_id": run_id,
@@ -208,6 +210,8 @@ def scrape_plays(
         f"games={summary['games_requested']} raw_pbp={summary['raw_pbp_count']} "
         f"plays={summary['plays_count']} failed={summary['failed_games_count']}"
     )
+    if zero_play_game_ids:
+        log("ZERO  parsed 0 plays for game_ids=" + ", ".join(zero_play_game_ids))
     return {
         "raw_pbp_rows": raw_pbp_rows,
         "plays_rows": plays_rows,

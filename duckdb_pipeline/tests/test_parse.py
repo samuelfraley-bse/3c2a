@@ -387,6 +387,95 @@ class ParseTests(unittest.TestCase):
         self.assertFalse(interception["completion"])
         self.assertEqual(interception["yards_gained"], 0)
 
+    def test_parse_pbp_html_quarter_start_embedded_ball_on_resets_possession(self) -> None:
+        game = {
+            "game_id": "20250913_z92j",
+            "schedule_home": "Ventura",
+            "schedule_away": "Bakersfield",
+            "home_team_canonical": "Ventura",
+            "away_team_canonical": "Bakersfield",
+        }
+        html = """
+        <html>
+          <head>
+            <meta property="og:title" content="Bakersfield at Ventura - Box Score - 9/13/2025" />
+            <link rel="canonical" href="https://3c2asports.org/sports/fball/2025-26/boxscores/20250913_z92j.xml?view=plays" />
+          </head>
+          <body>
+            <table>
+              <tr><td id="qtr2">2nd Quarter</td></tr>
+              <tr><th colspan="2">Ventura at 00:00</th></tr>
+              <tr>
+                <td>1st and 10 at VENTURA40</td>
+                <td>End of half, clock 15:00.</td>
+              </tr>
+              <tr><td id="qtr3">3rd Quarter</td></tr>
+              <tr>
+                <td>1st and 10 at VENTURA40</td>
+                <td>Start of 3rd quarter, clock 15:00, BAKERSFI ball on BAKERSFI25.</td>
+              </tr>
+              <tr>
+                <td>1st and 10 at BAKERSFI25</td>
+                <td>Ian Jernigan rush for 3 yards to the BAKERSFI28 (Marcellus Brigh).</td>
+              </tr>
+              <tr>
+                <td>2nd and 7 at BAKERSFI28</td>
+                <td>Chase Furtado pass complete to Dylan Johnson for 6 yards to the BAKERSFI34 (Easton Baker).</td>
+              </tr>
+            </table>
+          </body>
+        </html>
+        """
+        rows = parse_pbp_html(html, game, "2025-26", "run-6")
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(rows[0]["offense"], "Bakersfield")
+        self.assertEqual(rows[0]["defense"], "Ventura")
+        self.assertEqual(rows[1]["offense"], "Bakersfield")
+        self.assertEqual(rows[1]["defense"], "Ventura")
+        self.assertEqual(rows[1]["passer"], "Chase Furtado")
+        self.assertTrue(rows[1]["is_pass_attempt"])
+        self.assertTrue(rows[1]["completion"])
+        self.assertEqual(rows[1]["yards_gained"], 6)
+
+    def test_parse_play_two_point_pass_attempt_is_conversion(self) -> None:
+        game = {
+            "game_id": "20250830_fzzx",
+            "schedule_home": "Palomar",
+            "schedule_away": "Ventura",
+            "home_team_canonical": "Palomar",
+            "away_team_canonical": "Ventura",
+        }
+        html = """
+        <html>
+          <head>
+            <meta property="og:title" content="Palomar vs. Ventura - Box Score - 8/30/2025" />
+            <link rel="canonical" href="https://3c2asports.org/sports/fball/2025-26/boxscores/20250830_fzzx.xml?view=plays" />
+          </head>
+          <body>
+            <table>
+              <tr><td id="qtr2">2nd Quarter</td></tr>
+              <tr><th colspan="2">Ventura at 04:00</th></tr>
+              <tr>
+                <td></td>
+                <td>Braesen Leon pass attempt to TEAM failed (intercepted), returned by Hunter Stowe.</td>
+              </tr>
+            </table>
+          </body>
+        </html>
+        """
+        rows = parse_pbp_html(html, game, "2025-26", "run-7")
+        self.assertEqual(len(rows), 1)
+        play = rows[0]
+        self.assertEqual(play["play_type"], "two_point")
+        self.assertTrue(play["is_conversion"])
+        self.assertFalse(play["is_dropback"])
+        self.assertFalse(play["is_pass_attempt"])
+        self.assertFalse(play["is_rush_attempt"])
+        self.assertFalse(play["is_interception"])
+        self.assertFalse(play["completion"])
+        self.assertEqual(play["yards_gained"], 0)
+        self.assertEqual(play["fg_result"], "failed")
+
 
 if __name__ == "__main__":
     unittest.main()

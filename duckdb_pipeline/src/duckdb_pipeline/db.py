@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 
 def _duckdb_module():
@@ -155,6 +155,7 @@ def init_db(conn) -> None:
             yards_gained INTEGER,
             is_dropback BOOLEAN,
             is_attempt BOOLEAN,
+            is_conversion BOOLEAN,
             is_pass_attempt BOOLEAN,
             is_rush_attempt BOOLEAN,
             completion BOOLEAN,
@@ -257,17 +258,34 @@ def init_db(conn) -> None:
     )
     _ensure_column(conn, "plays", "is_pass_attempt", "BOOLEAN")
     _ensure_column(conn, "plays", "is_rush_attempt", "BOOLEAN")
+    _ensure_column(conn, "plays", "is_conversion", "BOOLEAN")
 
 
 def fetch_all(conn, sql: str, params: list[Any] | None = None) -> list[tuple[Any, ...]]:
     return conn.execute(sql, params or []).fetchall()
 
 
-def insert_rows(conn, table: str, rows: list[dict[str, Any]]) -> None:
+def insert_rows(
+    conn,
+    table: str,
+    rows: list[dict[str, Any]],
+    chunk_size: int | None = None,
+    progress_label: str | None = None,
+    progress_logger: Callable[[str], None] | None = None,
+) -> None:
     if not rows:
         return
     columns = list(rows[0].keys())
     placeholders = ", ".join(["?"] * len(columns))
     sql = f"INSERT INTO {table} ({', '.join(columns)}) VALUES ({placeholders})"
     values = [tuple(row.get(col) for col in columns) for row in rows]
-    conn.executemany(sql, values)
+    if not chunk_size or chunk_size <= 0 or len(values) <= chunk_size:
+        conn.executemany(sql, values)
+        return
+
+    total = len(values)
+    for start in range(0, total, chunk_size):
+        end = min(start + chunk_size, total)
+        conn.executemany(sql, values[start:end])
+        if progress_label and progress_logger:
+            progress_logger(f"INSERT {progress_label} [{end}/{total}]")

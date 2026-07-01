@@ -369,3 +369,48 @@ uv run --active python -m unittest discover tests
 - Why this breadcrumb matters:
   - it gives a stable accounting rule for future parser edge cases
   - it keeps team rushing, passing, and total offense aligned with official box-score semantics
+
+### Quarter-start possession reset bug found
+- While continuing Ventura/Bakersfield validation, found a second structural parser bug in:
+  - `20250913_z92j`
+- Symptom:
+  - a third-quarter `Chase Furtado -> Dylan Johnson for 6 yards` completion was being credited to `Ventura`
+  - that produced an extra `+1 completion`, `+1 attempt`, and `+6 passing yards` for Ventura
+- Root cause:
+  - the raw PBP used a quarter-start line with embedded possession text:
+    - `Start of 3rd quarter, clock 15:00, BAKERSFI ball on BAKERSFI25.`
+  - the parser recognized the quarter change but did not reset offense/defense from the embedded `TEAM ball on ...` token
+  - offense therefore leaked forward from the prior half until a cleaner possession cue appeared
+- Fix direction:
+  - treat quarter-start lines with embedded `TEAM ball on ...` text as valid possession resets
+  - reuse the same possession-resolution logic for:
+    - standalone `TEAM ball on ...` rows
+    - quarter-start rows that embed the same phrase
+- Why this matters:
+  - this is not a one-off Ventura bug
+  - it affects any source page that compresses quarter start and possession reset into a single sentence
+
+### Conversion-try accounting rule added
+- While validating `20250830_fzzx` (`Ventura at Palomar`), isolated a remaining season-passing mismatch to a post-touchdown try play:
+  - `Braesen Leon pass attempt to TEAM failed (intercepted), returned by Hunter Stowe.`
+- Surrounding sequence confirmed this occurs:
+  - immediately after a Ventura rushing touchdown
+  - immediately before the ensuing kickoff
+- Accounting interpretation:
+  - this is a conversion try, not a standard offensive passing play
+  - it should not count toward official team passing attempts, interceptions, or yards
+- Schema / parser decision:
+  - added explicit `plays.is_conversion`
+  - explicit pass-try rows now parse as:
+    - `play_type = 'two_point'`
+    - `is_conversion = true`
+    - `is_dropback = false`
+    - `is_pass_attempt = false`
+    - `is_rush_attempt = false`
+    - `is_interception = false`
+- Aggregate rule going forward:
+  - conversion tries should add no normal passing, rushing, or interception stats even before aggregation
+- Why this is better than a one-off patch:
+  - it preserves the raw football event for context
+  - it makes future audits easy if another try-format edge case appears
+  - it keeps official team stat reconciliation correct by parsed-play semantics, not just downstream filtering

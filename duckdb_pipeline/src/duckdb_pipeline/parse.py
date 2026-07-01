@@ -50,7 +50,10 @@ RE_FG = re.compile(
     re.IGNORECASE,
 )
 RE_PAT = re.compile(r"(\w[\w\s\-'\.]+?)\s+kick attempt\s+(GOOD|FAILED)", re.IGNORECASE)
-RE_TWO_PT = re.compile(r"(\w[\w\s\-'\.]+?)\s+(?:rush|pass)\s+attempt\s+(good|failed)", re.IGNORECASE)
+RE_TWO_PT = re.compile(
+    r"(\w[\w\s\-'\.]+?)\s+(rush|pass)\s+attempt\s+(good|failed)",
+    re.IGNORECASE,
+)
 _TEAM_TOK = r"((?:[A-Z]+\s+)*[A-Z]+)"
 RE_PENALTY_NAMED = re.compile(
     r"PENALTY\s+" + _TEAM_TOK + r"\s+([a-z][\w\s]*?)\s*\(([^)]+)\)\s+(\d+)\s+yards"
@@ -149,10 +152,37 @@ def _stamp_pass_flags(play: dict[str, object]) -> None:
     play["is_interception"] = play["pass_result"] == "int"
 
 
+def _stamp_try_flags(play: dict[str, object]) -> None:
+    play["is_dropback"] = False
+    play["is_attempt"] = False
+    play["is_pass_attempt"] = False
+    play["is_rush_attempt"] = False
+    play["completion"] = False
+    play["is_interception"] = False
+
+
 def _team_matches(team_name: str, drive_token: str) -> bool:
     team = _norm(team_name)
     drive = _norm(drive_token)
     return bool(team) and bool(drive) and (team in drive or drive in team)
+
+
+def _resolve_possession_from_text(
+    text: str,
+    match_home: str,
+    match_away: str,
+    home_team: str,
+    away_team: str,
+) -> tuple[str | None, str | None]:
+    ball_on = re.search(r"([A-Z][A-Z\s]*?)\s+ball on", text)
+    if not ball_on:
+        return None, None
+    token = ball_on.group(1).strip().upper()
+    if match_home.upper().startswith(token) or token in match_home.upper():
+        return home_team, away_team
+    if match_away.upper().startswith(token) or token in match_away.upper():
+        return away_team, home_team
+    return token, None
 
 
 def build_boxscore_url(season: str, game_id: str) -> str:
@@ -189,6 +219,7 @@ def parse_play(text: str) -> dict[str, object]:
         "yards_gained": None,
         "is_dropback": False,
         "is_attempt": False,
+        "is_conversion": False,
         "is_pass_attempt": False,
         "is_rush_attempt": False,
         "completion": False,
@@ -255,15 +286,26 @@ def parse_play(text: str) -> dict[str, object]:
     pat = RE_PAT.search(text)
     if pat:
         play["play_type"] = "pat"
+        play["is_conversion"] = True
         play["rusher"] = clean_player(pat.group(1))
         play["fg_result"] = pat.group(2).lower()
+        _stamp_try_flags(play)
         return play
 
     two_point = RE_TWO_PT.search(text)
     if two_point:
         play["play_type"] = "two_point"
-        play["rusher"] = clean_player(two_point.group(1))
-        play["fg_result"] = two_point.group(2).lower()
+        play["is_conversion"] = True
+        actor = clean_player(two_point.group(1))
+        attempt_type = two_point.group(2).lower()
+        play["fg_result"] = two_point.group(3).lower()
+        if attempt_type == "pass":
+            play["passer"] = actor
+            play["receiver"] = "TEAM"
+        else:
+            play["rusher"] = actor
+        play["yards_gained"] = 0
+        _stamp_try_flags(play)
         return play
 
     kickoff = RE_KICKOFF.search(text)
@@ -324,20 +366,14 @@ def parse_play(text: str) -> dict[str, object]:
 
     pass_attempt = RE_PASS_ATTEMPT.search(text)
     if pass_attempt:
-        play["play_type"] = "pass"
+        play["play_type"] = "two_point"
+        play["is_conversion"] = True
         play["passer"] = clean_player(pass_attempt.group(1))
         play["receiver"] = clean_player(pass_attempt.group(2))
-        if pass_attempt.group(3).lower() == "good":
-            play["pass_result"] = "complete"
-            play["yards_gained"] = parse_yards(text)
-        elif "intercept" in text.lower():
-            play["pass_result"] = "int"
-            play["yards_gained"] = 0
-        else:
-            play["pass_result"] = "incomplete"
-            play["yards_gained"] = 0
+        play["fg_result"] = pass_attempt.group(3).lower()
+        play["yards_gained"] = 0
         play["tackler_1"], play["tackler_2"] = parse_tacklers(text)
-        _stamp_pass_flags(play)
+        _stamp_try_flags(play)
         return play
 
     rush = RE_RUSH.search(text)
@@ -618,14 +654,25 @@ def parse_pbp_html(html: str, game: dict[str, str], season: str, run_id: str) ->
         quarter_match = RE_QUARTER_START.search(play_text)
         if quarter_match:
             quarter = int(quarter_match.group(1))
+            next_offense, next_defense = _resolve_possession_from_text(
+                play_text,
+                match_home,
+                match_away,
+                home_team,
+                away_team,
+            )
+            if next_offense:
+                offense, defense = next_offense, next_defense
             continue
-        ball_on = re.match(r"^([A-Z][A-Z\s]*?)\s+ball on", play_text)
-        if ball_on:
-            token = ball_on.group(1).strip().upper()
-            if match_home.upper().startswith(token) or token in match_home.upper():
-                offense, defense = home_team, away_team
-            elif match_away.upper().startswith(token) or token in match_away.upper():
-                offense, defense = away_team, home_team
+        next_offense, next_defense = _resolve_possession_from_text(
+            play_text,
+            match_home,
+            match_away,
+            home_team,
+            away_team,
+        )
+        if next_offense:
+            offense, defense = next_offense, next_defense
             continue
         if not play_text or play_text == "\xa0":
             continue
