@@ -4,6 +4,10 @@ Milestone 1 of the Foothill DuckDB rebuild.
 
 This subproject is a clean-room restart of the DuckDB pipeline.
 
+See also:
+
+- `METRICS.md` for the canonical football metrics and filter definitions that should drive future reports and dashboards.
+
 Milestone 1 covers the structure pipeline:
 
 - standings
@@ -53,6 +57,20 @@ Additional tables for the next slice:
 - `field_position_crosswalk`
 - `play_field_positions`
 
+Core helper views:
+
+- `v_current_structure_runs`
+- `v_current_plays_runs`
+- `v_current_field_position_runs`
+- `v_current_runs`
+- `v_games_current`
+- `v_plays_current`
+- `v_play_field_positions_current`
+- `v_team_game_offense`
+- `v_team_game_offense_current`
+- `v_team_season_offense_current`
+- `v_pbp_coverage_by_team_current`
+
 ## Run
 
 From the repo root:
@@ -97,6 +115,48 @@ uv run --active scrape_season_plays --season 2025-26 --source-run-id <structure_
 ```
 
 For large full-season runs, treat the process as incomplete until the console prints `DONE run_id=...`. The `WRITE plays ...` line is only the start of the DuckDB insert/commit phase and may be followed by several minutes of database work before the prompt returns.
+
+## Working with current runs
+
+The base tables remain append-only and auditable by `run_id`.
+
+For day-to-day analysis, prefer the helper views instead of hardcoding run IDs in every query:
+
+```sql
+select *
+from v_current_runs;
+```
+
+```sql
+select *
+from v_plays_current
+limit 100;
+```
+
+```sql
+select *
+from v_games_current
+order by game_date, game_id;
+```
+
+```sql
+select *
+from v_team_season_offense_current
+order by pass_yds desc;
+```
+
+```sql
+select *
+from v_pbp_coverage_by_team_current
+order by missing_pbp_games desc, team_name;
+```
+
+This gives the project two layers:
+
+- raw audited storage in tables like `plays`, `games`, and `pipeline_runs`
+- operator-facing working surfaces in `v_*_current`
+
+When a better reparse becomes the blessed working run, the current views automatically point at the latest completed run for that season.
 
 For field-position review and enrichment:
 
@@ -172,6 +232,28 @@ And a two-point pass try should read as:
 - `is_rush_attempt = false`
 
 That keeps try plays in the event log while ensuring they contribute no normal passing, rushing, or interception stats by construction.
+
+## Source reconciliation note
+
+For now, the `plays` table should be treated as the source of truth for play-derived modeling and aggregates built directly from public play-by-play.
+
+That matters because some `3C2A` game pages appear internally inconsistent:
+
+- the public `?view=plays` event log can disagree with
+- the game-level box-score stat table or season aggregate pages
+
+Current known example:
+
+- `20251116_5n02` (`Santa Monica at Victor Valley`, `November 16, 2025`)
+- public play-by-play supports `3` Victor Valley passing touchdowns
+- the box-score passing table credits `Seth Burbine` with `4`
+- the scoring summary also contains at least one mislabeled row on the source site
+
+So the current policy is:
+
+- trust public play-by-play for `plays` and play-derived aggregates
+- log game-level source discrepancies when discovered
+- defer any official box-score reconciliation into a later, explicit audit layer rather than silently overriding parsed play events
 
 ## Review queue workflow
 

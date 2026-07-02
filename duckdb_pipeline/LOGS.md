@@ -1,5 +1,67 @@
 # DuckDB Pipeline Log
 
+## 2026-07-03
+
+### Session checkpoint
+- Opened a new design session around the post-validation analytics layer.
+- Decision:
+  - freeze the current `plays` checkpoint as the working analytics source
+  - define the football metrics contract before building the first automated report
+  - keep the next implementation sequence as:
+    - metrics spec
+    - derived context views
+    - automated `team_report`
+    - later dashboard
+
+### Metrics spec v1 added
+- Added `duckdb_pipeline/METRICS.md` as the canonical football metrics and filters spec for the current `plays`-driven analytics layer.
+- The document is intentionally a broad draft, but every metric/filter is labeled as:
+  - `supported_now`
+  - `derived_next`
+  - `future_modeling`
+- Locked project defaults:
+  - offense/defense perspective definitions
+  - success-rate rule:
+    - `1st down = 50%`
+    - `2nd down = 70%`
+    - `3rd/4th down = 100%`
+  - explosive thresholds:
+    - `rush >= 10`
+    - completed `pass >= 20`
+  - `week` as team game order within season
+  - normalized field-position analysis around `yardline_100` / zones
+- Explicitly documented that:
+  - `score_margin` is planned but not currently supported
+  - `line_yards` can be a later project-defined estimate
+  - `EPA` and `expected_completion_rate` require future modeling layers
+- The intended next implementation target remains:
+  - derived play-context and team report views
+  - then a first automated `team_report`
+
+### Current-run helper views added
+- Added a small operator-facing DuckDB view layer so routine analysis no longer has to hardcode `run_id` values.
+- New current-run helper views:
+  - `v_current_structure_runs`
+  - `v_current_plays_runs`
+  - `v_current_field_position_runs`
+  - `v_current_runs`
+- New current working-surface views:
+  - `v_games_current`
+  - `v_plays_current`
+  - `v_play_field_positions_current`
+- New offense rollup views:
+  - `v_team_game_offense`
+  - `v_team_game_offense_current`
+  - `v_team_season_offense_current`
+  - `v_pbp_coverage_by_team_current`
+- Intent:
+  - keep base tables append-only and fully auditable
+  - make DBeaver / SQL work feel stable by querying a blessed "current" surface
+  - reduce repeated manual use of run IDs for routine inspection
+- Current behavior:
+  - the `v_*_current` views follow the latest completed run for each season by pipeline timestamp
+  - raw historical runs remain queryable directly in `plays`, `games`, and `pipeline_runs`
+
 ## 2026-06-28
 
 ### Milestone 1 created
@@ -513,3 +575,217 @@ uv run --active python -m unittest discover tests
   - the fake punt is malformed source residue and should not survive parsing
   - the remaining San Francisco incompletions are present as ordinary football plays in the raw PBP and should be preserved
   - we should prefer the game-level raw/box sources over a contradictory season aggregate page when deciding whether to suppress parsed events
+
+### Passing validation checkpoint
+- Rebuilt full-season `plays` from stored raw HTML into:
+  - `63fa3f95-a627-44fe-851a-d7463fcab7b6`
+- Confirmed exact season passing matches against the official `2025-26` site for:
+  - `Riverside`
+  - `Moorpark`
+  - `Citrus`
+  - `San Francisco`
+  - `Long Beach`
+  - `Foothill`
+- Confirmed additional strong matches or near-matches that no longer look urgent:
+  - `Ventura`
+  - `Pasadena City`
+  - `Golden West`
+  - `Mt. San Antonio`
+  - `Southwestern`
+  - `Fullerton`
+  - `Reedley`
+  - `Shasta`
+  - `San Mateo`
+  - `Laney`
+  - `Compton`
+- Remaining weaker teams fall into two broad buckets:
+  - likely low-/missing-PBP coverage cluster:
+    - `Hartnell`
+    - `Feather River`
+    - `Gavilan`
+    - related schools already seen in that network such as `Cabrillo`, `Chabot`, `Merced`, `San Joaquin Delta`, `Siskiyous`
+  - meaningful remaining validation targets where parser/accounting issues may still exist:
+    - `Los Medanos`
+    - `Victor Valley`
+    - `Monterey Peninsula`
+    - `Santa Monica`
+    - `Mt. San Jacinto`
+    - `Fresno City`
+    - `LA Valley`
+    - `Contra Costa`
+- Most promising next targeted parser audit when work resumes:
+  - `Los Medanos`
+- Reason:
+  - it is high on the passing leaderboard
+  - the gap is large enough to be worth attention
+  - and it may expose either a small number of missing games or a real remaining parser issue rather than just the already-known low-coverage school cluster
+
+### Victor Valley vs Santa Monica source-side discrepancy
+- Investigated `Victor Valley` passing mismatch for:
+  - `20251116_5n02`
+  - `Santa Monica at Victor Valley`
+  - `November 16, 2025`
+- DuckDB / parsed public PBP currently shows:
+  - `29 comp`
+  - `39 att`
+  - `248 yds`
+  - `3 pass TD`
+  - `1 INT`
+- Official game-level box-score passing table shows:
+  - `Seth Burbine 30-38, 339 yds, 4 TD, 1 INT`
+  - `Ricky Sampson 0-1, 0 yds, 0 TD, 0 INT`
+- Confirmed:
+  - the stored `raw_pbp_html` rows for `20251116_5n02` are all correctly tied to the `November 16, 2025` game
+  - this is **not** a bad `game_id` / opponent-pairing issue despite Victor Valley playing Santa Monica twice in `2025-26`
+  - the public `?view=plays` page itself only exposes `3` Victor Valley passing touchdowns:
+    - `Seth Burbine -> Darren Gandy` for `4`
+    - `Seth Burbine -> Darren Gandy` for `2`
+    - `Seth Burbine -> Cael Meisman` for `19`
+- Additional important clue from the site scoring summary:
+  - one `4th quarter` summary row is mislabeled as:
+    - `Victor Valley - Dylan Moreno pass complete to Bryson Wood for 39 yards ...`
+  - but `Dylan Moreno` and `Bryson Wood` are `Santa Monica`, and the surrounding score flow confirms it is a `Santa Monica` touchdown
+- Working conclusion:
+  - DuckDB is matching the visible public play-by-play for this game
+  - the `3C2A` source pages are internally inconsistent for this game
+  - this is best treated as a **source-side stat discrepancy**, not a current parser bug
+- Current policy implication:
+  - keep `plays` as `PBP-truth` for play-derived modeling
+  - note that some team-level validations against official aggregate/box pages may require a future box-score reconciliation layer
+
+### Passing checkpoint: good enough to proceed
+- Current `2025-26` season passing totals are in a usable place for play-by-play-driven tendency work.
+- Decision:
+  - do **not** keep chasing exact official season passing reconciliation right now
+  - accept remaining mismatches where they are clearly driven by:
+    - low / missing public PBP coverage
+    - source-side page inconsistencies
+    - noisy control/state rows in public PBP
+- Teams that now look broadly reliable for PBP-derived passing work include:
+  - `Riverside`
+  - `Diablo Valley`
+  - `Sequoias`
+  - `Ventura`
+  - `Moorpark`
+  - `Citrus`
+  - `Pasadena City`
+  - `Golden West`
+  - `Long Beach`
+  - `De Anza`
+  - `Cerritos`
+  - `San Francisco`
+  - `Grossmont`
+  - `Mt. San Antonio`
+  - `Southwestern`
+  - `Palomar`
+  - `Coalinga`
+  - `Antelope Valley`
+  - `Glendale`
+  - `El Camino`
+  - `Saddleback`
+  - `Fullerton`
+  - `West LA`
+  - `Reedley`
+  - `Shasta`
+  - `San Mateo`
+  - `Laney`
+  - `Foothill`
+- Teams with remaining known weakness / unresolved passing reconciliation are left as future work, especially:
+  - `Los Medanos`
+  - `Victor Valley`
+  - `Monterey Peninsula`
+  - `Santa Monica`
+  - `Mt. San Jacinto`
+  - `LA Valley`
+  - `Contra Costa`
+  - `San Joaquin Delta`
+  - `Cabrillo`
+  - `Desert`
+  - `American River`
+  - `Chabot`
+  - `Merced`
+  - `LA Pierce`
+  - `Feather River`
+  - `Gavilan`
+  - `Hartnell`
+- Next step after this checkpoint:
+  - shift validation attention to `rushing`, using the same philosophy:
+    - prefer public PBP as modeling truth
+    - log known source mismatches
+    - avoid forcing exact official reconciliation where source pages conflict
+
+### Rushing checkpoint: missing-game coverage is real for some programs
+- While reviewing the `2025-26` rushing mismatches, separated two different failure shapes:
+  - real missing-game public PBP coverage
+  - games present in public PBP but still disagreeing with official totals
+- Using:
+  - structure run `4b573736-96bb-4939-8ea8-661f0e51ddfc`
+  - rebuilt plays run `63fa3f95-a627-44fe-851a-d7463fcab7b6`
+- Confirmed missing-PBP cluster counts for the weaker teams:
+  - `Hartnell`: `6` missing games
+  - `Feather River`: `4` missing games
+  - `Gavilan`: `4` missing games
+  - `Siskiyous`: `2` missing games
+  - `Cabrillo`: `1` missing game
+  - `Chabot`: `1` missing game
+  - `Contra Costa`: `1` missing game
+  - `LA Valley`: `1` missing game
+  - `Los Medanos`: `1` missing game
+  - `Merced`: `1` missing game
+  - `San Joaquin Delta`: `1` missing game
+- Confirmed the main missing-opponent islands are:
+  - `Hartnell` (`6` distinct games)
+  - `Feather River` (`4`)
+  - `Gavilan` (`4`)
+  - `Siskiyous` (`2`)
+- Practical interpretation:
+  - for programs like `Hartnell`, `Feather River`, `Gavilan`, `Siskiyous`, `Cabrillo`, `Chabot`, `Contra Costa`, `Los Medanos`, `Merced`, and `San Joaquin Delta`, a meaningful share of the rushing gap is explained by **real absent public PBP**, not just parser logic
+  - this makes those teams weak candidates for exact season-total reconciliation from `plays` alone
+- Also useful to note the opposite case:
+  - some teams still look off **without** a corresponding missing-game explanation, so they stay in the "source weirdness / accounting / future audit" bucket
+  - especially `Victor Valley`, `San Francisco`, `De Anza`, `West LA`, `LA Southwest`, `Monterey Peninsula`, and `LA Pierce`
+- Takeaway:
+  - "missing games is real for some programs" is now a documented fact, not just a suspicion
+  - future validation should first ask:
+    - is this team inside a missing-PBP cluster?
+    - or is this a present-but-weird source/accounting case?
+
+### Session wrap / frozen checkpoint
+- Freeze decision for `2025-26`:
+  - treat the current rebuilt `plays` layer as stable enough for team tendency/context work
+  - do **not** keep trying to force exact official stat-page reconciliation inside the `plays` parser
+  - keep known weak programs documented rather than silently "fixing" them with overrides
+- Frozen working baseline:
+  - structure run: `4b573736-96bb-4939-8ea8-661f0e51ddfc`
+  - plays scrape source run: `75e20b24-e705-463c-b966-59d32dd2d361`
+  - current frozen full reparse baseline: `63fa3f95-a627-44fe-851a-d7463fcab7b6`
+- Current high-level stance:
+  - `plays` = tendency/context truth
+  - future `box score` layer = official game-performance / validation truth
+  - reconciliation should live in an explicit audit layer later, not as silent overwrite logic
+- Recommended next implementation track:
+  - create a parallel box-score layer for later validation and missing-PBP coverage support
+  - suggested tables:
+    - `raw_boxscore_html`
+    - `box_score_team_stats`
+  - keep this separate from `plays`
+- Recommended derived-football track after that:
+  - build `team_game_stats` from `plays`
+  - build `team_season_stats` on top of `team_game_stats`
+  - preserve the current semantics:
+    - `is_dropback`
+    - `is_pass_attempt`
+    - `is_rush_attempt`
+    - `is_sack`
+  - then add situational rollups such as:
+    - down / distance
+    - normalized field position
+    - red zone
+    - quarter / clock bucket
+    - score margin
+- Practical plan for next session:
+  - `1.` scaffold the box-score ingestion layer without changing the existing `plays` pipeline
+  - `2.` scrape/store one season of raw box-score pages by `game_id`
+  - `3.` parse team-level official game stats into a separate curated table
+  - `4.` compare `plays`-derived `team_game_stats` vs `box_score_team_stats` game by game
+  - `5.` only then decide if any targeted reconciliation rules are worth adding

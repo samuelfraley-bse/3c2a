@@ -29,6 +29,323 @@ def _ensure_column(conn, table: str, column: str, column_type: str) -> None:
         conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {column_type}")
 
 
+def _refresh_views(conn) -> None:
+    conn.execute(
+        """
+        CREATE OR REPLACE VIEW v_current_structure_runs AS
+        WITH ranked AS (
+            SELECT
+                run_id,
+                season,
+                started_at,
+                finished_at,
+                standings_count,
+                schedule_count,
+                games_count,
+                ROW_NUMBER() OVER (
+                    PARTITION BY season
+                    ORDER BY COALESCE(finished_at, started_at) DESC, run_id DESC
+                ) AS rn
+            FROM pipeline_runs
+            WHERE status = 'completed'
+              AND games_count IS NOT NULL
+        )
+        SELECT
+            season,
+            run_id AS structure_run_id,
+            started_at,
+            finished_at,
+            standings_count,
+            schedule_count,
+            games_count
+        FROM ranked
+        WHERE rn = 1
+        """
+    )
+    conn.execute(
+        """
+        CREATE OR REPLACE VIEW v_current_plays_runs AS
+        WITH ranked AS (
+            SELECT
+                run_id,
+                season,
+                started_at,
+                finished_at,
+                CASE
+                    WHEN json_valid(notes) THEN json_extract_string(notes, '$.source_run_id')
+                    ELSE NULL
+                END AS source_run_id,
+                CASE
+                    WHEN json_valid(notes) THEN json_extract_string(notes, '$.reparsed_from_plays_run_id')
+                    ELSE NULL
+                END AS reparsed_from_plays_run_id,
+                CASE
+                    WHEN json_valid(notes) THEN TRY_CAST(json_extract_string(notes, '$.raw_pbp_count') AS INTEGER)
+                    ELSE NULL
+                END AS raw_pbp_count,
+                CASE
+                    WHEN json_valid(notes) THEN TRY_CAST(json_extract_string(notes, '$.plays_count') AS INTEGER)
+                    ELSE NULL
+                END AS plays_count,
+                ROW_NUMBER() OVER (
+                    PARTITION BY season
+                    ORDER BY COALESCE(finished_at, started_at) DESC, run_id DESC
+                ) AS rn
+            FROM pipeline_runs
+            WHERE status = 'completed'
+              AND notes LIKE '%"plays_count"%'
+        )
+        SELECT
+            season,
+            run_id AS plays_run_id,
+            source_run_id,
+            reparsed_from_plays_run_id,
+            started_at,
+            finished_at,
+            raw_pbp_count,
+            plays_count
+        FROM ranked
+        WHERE rn = 1
+        """
+    )
+    conn.execute(
+        """
+        CREATE OR REPLACE VIEW v_current_field_position_runs AS
+        WITH ranked AS (
+            SELECT
+                run_id,
+                season,
+                started_at,
+                finished_at,
+                CASE
+                    WHEN json_valid(notes) THEN json_extract_string(notes, '$.source_plays_run_id')
+                    ELSE NULL
+                END AS source_plays_run_id,
+                CASE
+                    WHEN json_valid(notes) THEN TRY_CAST(json_extract_string(notes, '$.field_position_rows') AS INTEGER)
+                    ELSE NULL
+                END AS field_position_rows,
+                CASE
+                    WHEN json_valid(notes) THEN TRY_CAST(json_extract_string(notes, '$.resolved_count') AS INTEGER)
+                    ELSE NULL
+                END AS resolved_count,
+                CASE
+                    WHEN json_valid(notes) THEN TRY_CAST(json_extract_string(notes, '$.unresolved_count') AS INTEGER)
+                    ELSE NULL
+                END AS unresolved_count,
+                ROW_NUMBER() OVER (
+                    PARTITION BY season
+                    ORDER BY COALESCE(finished_at, started_at) DESC, run_id DESC
+                ) AS rn
+            FROM pipeline_runs
+            WHERE status = 'completed'
+              AND notes LIKE '%"field_position_rows"%'
+        )
+        SELECT
+            season,
+            run_id AS field_position_run_id,
+            source_plays_run_id,
+            started_at,
+            finished_at,
+            field_position_rows,
+            resolved_count,
+            unresolved_count
+        FROM ranked
+        WHERE rn = 1
+        """
+    )
+    conn.execute(
+        """
+        CREATE OR REPLACE VIEW v_current_runs AS
+        SELECT
+            COALESCE(s.season, p.season, f.season) AS season,
+            s.structure_run_id,
+            p.plays_run_id,
+            f.field_position_run_id,
+            p.source_run_id AS plays_source_structure_run_id,
+            p.reparsed_from_plays_run_id,
+            f.source_plays_run_id AS field_position_source_plays_run_id
+        FROM v_current_structure_runs s
+        FULL OUTER JOIN v_current_plays_runs p
+            ON p.season = s.season
+        FULL OUTER JOIN v_current_field_position_runs f
+            ON f.season = COALESCE(s.season, p.season)
+        """
+    )
+    conn.execute(
+        """
+        CREATE OR REPLACE VIEW v_games_current AS
+        SELECT
+            g.*,
+            r.structure_run_id
+        FROM games g
+        JOIN v_current_structure_runs r
+          ON r.season = g.season
+         AND r.structure_run_id = g.run_id
+        """
+    )
+    conn.execute(
+        """
+        CREATE OR REPLACE VIEW v_plays_current AS
+        SELECT
+            p.*,
+            r.plays_run_id,
+            r.source_run_id AS source_structure_run_id,
+            r.reparsed_from_plays_run_id
+        FROM plays p
+        JOIN v_current_plays_runs r
+          ON r.season = p.season
+         AND r.plays_run_id = p.run_id
+        """
+    )
+    conn.execute(
+        """
+        CREATE OR REPLACE VIEW v_play_field_positions_current AS
+        SELECT
+            pfp.*,
+            r.field_position_run_id,
+            r.source_plays_run_id AS current_source_plays_run_id
+        FROM play_field_positions pfp
+        JOIN v_current_field_position_runs r
+          ON r.season = pfp.season
+         AND r.field_position_run_id = pfp.run_id
+        """
+    )
+    conn.execute(
+        """
+        CREATE OR REPLACE VIEW v_team_game_offense AS
+        SELECT
+            p.season,
+            p.run_id,
+            p.game_id,
+            p.offense AS team_name,
+            MAX(p.schedule_home) AS schedule_home,
+            MAX(p.schedule_away) AS schedule_away,
+            SUM(CASE WHEN p.is_pass_attempt THEN 1 ELSE 0 END) AS pass_att,
+            SUM(CASE WHEN p.completion THEN 1 ELSE 0 END) AS pass_comp,
+            SUM(
+                CASE
+                    WHEN p.play_type = 'pass'
+                     AND NOT COALESCE(p.is_sack, FALSE)
+                     AND NOT COALESCE(p.is_interception, FALSE)
+                    THEN COALESCE(p.yards_gained, 0)
+                    ELSE 0
+                END
+            ) AS pass_yds,
+            SUM(CASE WHEN p.is_interception THEN 1 ELSE 0 END) AS pass_int,
+            SUM(
+                CASE
+                    WHEN p.play_type = 'pass'
+                     AND p.is_td
+                    THEN 1
+                    ELSE 0
+                END
+            ) AS pass_td,
+            SUM(CASE WHEN p.is_rush_attempt THEN 1 ELSE 0 END) AS rush_att,
+            SUM(CASE WHEN p.is_rush_attempt THEN COALESCE(p.yards_gained, 0) ELSE 0 END) AS rush_yds,
+            SUM(
+                CASE
+                    WHEN p.is_rush_attempt
+                     AND p.is_td
+                    THEN 1
+                    ELSE 0
+                END
+            ) AS rush_td,
+            SUM(CASE WHEN p.is_sack THEN 1 ELSE 0 END) AS sacks,
+            SUM(CASE WHEN p.is_dropback THEN 1 ELSE 0 END) AS dropbacks,
+            COUNT(*) AS play_count
+        FROM plays p
+        WHERE p.offense IS NOT NULL
+          AND p.offense <> ''
+        GROUP BY 1,2,3,4
+        """
+    )
+    conn.execute(
+        """
+        CREATE OR REPLACE VIEW v_team_game_offense_current AS
+        SELECT tgo.*
+        FROM v_team_game_offense tgo
+        JOIN v_current_plays_runs r
+          ON r.season = tgo.season
+         AND r.plays_run_id = tgo.run_id
+        """
+    )
+    conn.execute(
+        """
+        CREATE OR REPLACE VIEW v_team_season_offense_current AS
+        SELECT
+            season,
+            run_id,
+            team_name,
+            COUNT(DISTINCT game_id) AS games,
+            SUM(pass_att) AS pass_att,
+            SUM(pass_comp) AS pass_comp,
+            SUM(pass_yds) AS pass_yds,
+            SUM(pass_int) AS pass_int,
+            SUM(pass_td) AS pass_td,
+            SUM(rush_att) AS rush_att,
+            SUM(rush_yds) AS rush_yds,
+            SUM(rush_td) AS rush_td,
+            SUM(sacks) AS sacks,
+            SUM(dropbacks) AS dropbacks,
+            SUM(play_count) AS play_count
+        FROM v_team_game_offense_current
+        GROUP BY 1,2,3
+        """
+    )
+    conn.execute(
+        """
+        CREATE OR REPLACE VIEW v_pbp_coverage_by_team_current AS
+        WITH current_structure AS (
+            SELECT * FROM v_current_structure_runs
+        ),
+        current_plays AS (
+            SELECT * FROM v_current_plays_runs
+        ),
+        schedule_games AS (
+            SELECT
+                s.season,
+                s.team_name,
+                COUNT(DISTINCT s.game_id) AS scheduled_games
+            FROM schedule s
+            JOIN current_structure cs
+              ON cs.season = s.season
+             AND cs.structure_run_id = s.run_id
+            GROUP BY 1,2
+        ),
+        pbp_games AS (
+            SELECT
+                p.season,
+                p.offense AS team_name,
+                COUNT(DISTINCT p.game_id) AS pbp_games
+            FROM plays p
+            JOIN current_plays cp
+              ON cp.season = p.season
+             AND cp.plays_run_id = p.run_id
+            WHERE p.offense IS NOT NULL
+              AND p.offense <> ''
+            GROUP BY 1,2
+        )
+        SELECT
+            sg.season,
+            cs.structure_run_id,
+            cp.plays_run_id,
+            sg.team_name,
+            sg.scheduled_games,
+            COALESCE(pg.pbp_games, 0) AS pbp_games,
+            sg.scheduled_games - COALESCE(pg.pbp_games, 0) AS missing_pbp_games
+        FROM schedule_games sg
+        JOIN current_structure cs
+          ON cs.season = sg.season
+        LEFT JOIN current_plays cp
+          ON cp.season = sg.season
+        LEFT JOIN pbp_games pg
+          ON pg.season = sg.season
+         AND pg.team_name = sg.team_name
+        """
+    )
+
+
 def init_db(conn) -> None:
     conn.execute(
         """
@@ -259,6 +576,7 @@ def init_db(conn) -> None:
     _ensure_column(conn, "plays", "is_pass_attempt", "BOOLEAN")
     _ensure_column(conn, "plays", "is_rush_attempt", "BOOLEAN")
     _ensure_column(conn, "plays", "is_conversion", "BOOLEAN")
+    _refresh_views(conn)
 
 
 def fetch_all(conn, sql: str, params: list[Any] | None = None) -> list[tuple[Any, ...]]:

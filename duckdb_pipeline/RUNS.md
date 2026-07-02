@@ -54,6 +54,12 @@ This file is the quick operator ledger for important DuckDB pipeline runs.
   - counts: `347 raw_pbp`, `55853 plays`
   - note: current best full reparse after try-play semantics change and defensive fumble-return TD fix; validated Ventura @ Palomar at `37/19/220/0/1` and Long Beach season passing at `393/220/3129/9/30`
 
+- `63fa3f95-a627-44fe-851a-d7463fcab7b6`
+  - status: completed
+  - reparsed_from_plays_run_id: `75e20b24-e705-463c-b966-59d32dd2d361`
+  - counts: `347 raw_pbp`, `55850 plays`
+  - note: latest frozen 2025-26 full reparse baseline used for passing and rushing checkpoint validation; acceptable for tendency/context work despite known source-side and missing-PBP gaps
+
 ### Field-position workflow checkpoints
 
 - `3e4103ae-62c3-4195-9c45-71df4fcc23ce`
@@ -76,4 +82,4 @@ This file is the quick operator ledger for important DuckDB pipeline runs.
   - `4b573736-96bb-4939-8ea8-661f0e51ddfc`
 
 - `current best 2025-26 full reparse run`
-  - `85e57f9b-2363-4244-8d23-a1085093dcc7`
+  - `63fa3f95-a627-44fe-851a-d7463fcab7b6`
