@@ -476,3 +476,40 @@ uv run --active python -m unittest discover tests
   - the source can contradict itself mid-drive
   - future failures may come from malformed possession labels rather than missing games
   - this class of bug is a good candidate for later automated anomaly detection when raw HTML contains conflicting possession cues for the same timestamp
+
+### Ghost-drive residue after possession fix
+- After the contradictory-drive possession fix was reparsed into:
+  - `ec2b4ae5-7bbb-403d-84bc-71f16339ba3a`
+- San Francisco vs Sierra (`20250927_6pu6`) improved to the correct:
+  - `18` completions
+  - `320` passing yards
+  - `0` interceptions
+  - `2` passing touchdowns
+- But the game still shows an attempts mismatch:
+  - DuckDB: `27 att / 18 comp`
+  - official: `22 att / 18 comp`
+- This indicates the main ghost-drive possession error is fixed, but malformed source rows still survive as parsed football events.
+- Current smoking-gun example:
+  - parsed `play_id 88`
+  - `Andre Watson punt no gain to the CCSF40, downed.`
+- Why this matters:
+  - the row appears immediately after Sierra's real punt and immediately before the restored San Francisco completion sequence
+  - that strongly suggests we still need a second layer of control-row / duplicate-event hardening for malformed ghost-drive regions
+- Working interpretation:
+  - possession attribution is now mostly correct
+  - event suppression for malformed duplicate rows is still incomplete
+
+### San Francisco vs Sierra attempts reconciliation
+- Follow-up validation for `20250927_6pu6` showed the remaining `27 att / 18 comp / 320 yds / 0 int / 2 td` line is supported by:
+  - the raw play-by-play page
+  - the game-level box score
+- Important correction:
+  - the earlier `official: 22 att / 18 comp` comparison came from a season-level stats page and does **not** appear to match the game-level source documents for this game
+- Decision:
+  - keep the narrow suppression for the clearly bogus ghost-drive punt residue:
+    - `Andre Watson punt no gain to the CCSF40, downed.`
+  - do **not** add any broader pass-attempt suppression rules for this game
+- Rationale:
+  - the fake punt is malformed source residue and should not survive parsing
+  - the remaining San Francisco incompletions are present as ordinary football plays in the raw PBP and should be preserved
+  - we should prefer the game-level raw/box sources over a contradictory season aggregate page when deciding whether to suppress parsed events

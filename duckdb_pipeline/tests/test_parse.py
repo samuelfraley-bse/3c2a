@@ -458,6 +458,10 @@ class ParseTests(unittest.TestCase):
               <tr><th colspan="2">Sierra at 00:56</th></tr>
               <tr>
                 <td>1st and 10 at CCSF40</td>
+                <td>Andre Watson punt no gain to the CCSF40, downed.</td>
+              </tr>
+              <tr>
+                <td>1st and 10 at CCSF40</td>
                 <td>Sierra drive start at 00:56.</td>
               </tr>
               <tr>
@@ -480,6 +484,7 @@ class ParseTests(unittest.TestCase):
         self.assertEqual(len(rows), 2)
         self.assertEqual(rows[0]["play_type"], "punt")
         self.assertEqual(rows[0]["offense"], "San Francisco")
+        self.assertEqual(rows[0]["raw_text"], "Joel Bradley punt 26 yards to the CCSF40, downed.")
         self.assertEqual(rows[1]["play_type"], "pass")
         self.assertEqual(rows[1]["offense"], "San Francisco")
         self.assertEqual(rows[1]["defense"], "Sierra")

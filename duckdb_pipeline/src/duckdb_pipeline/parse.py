@@ -77,6 +77,10 @@ RE_FUMBLE = re.compile(
 RE_FIELD_POS = re.compile(r"^([A-Z][A-Z0-9\s\.\-_]*?)(\d+)$")
 RE_TACKLERS = re.compile(r"\(([^()]+)\)\s*\.?\s*$")
 RE_LASTFIRST_TOKEN = re.compile(r"\b([A-Z][a-zA-Z\-']+),([A-Z][a-zA-Z\-']+)\b")
+RE_PUNT_TARGET = re.compile(
+    r"punt(?:\s+\d+\s+yards|\s+no gain)?\s+to\s+the\s+([A-Z][A-Z0-9\s\.\-_]*?\d+)",
+    re.IGNORECASE,
+)
 
 
 def _parse_matchup_teams_from_label(label: str) -> tuple[str, str] | None:
@@ -144,6 +148,13 @@ def normalize_play_text(text: str) -> str:
     text = re.sub(r"\s+([,.;:])", r"\1", text)
     text = re.sub(r"([,;:])(?=[A-Za-z])", r"\1 ", text)
     return text.strip()
+
+
+def extract_punt_target(text: str) -> str | None:
+    match = RE_PUNT_TARGET.search(text)
+    if not match:
+        return None
+    return normalize_field_position(match.group(1))
 
 
 def _stamp_pass_flags(play: dict[str, object]) -> None:
@@ -648,6 +659,7 @@ def parse_pbp_html(html: str, game: dict[str, str], season: str, run_id: str) ->
     drive_start_time: str | None = None
     offense: str | None = None
     defense: str | None = None
+    previous_play: dict[str, object] | None = None
 
     for row in rows:
         headers = row.find_all("th")
@@ -750,6 +762,22 @@ def parse_pbp_html(html: str, game: dict[str, str], season: str, run_id: str) ->
         play_id += 1
         parsed = parse_play(play_text)
 
+        # Some malformed source blocks emit a fake "punt no gain ... downed" row
+        # immediately after the real punt to the same spot during a bad drive reset.
+        if (
+            parsed.get("play_type") == "punt"
+            and "no gain" in play_text.lower()
+            and "downed" in play_text.lower()
+            and field_position
+            and previous_play is not None
+            and previous_play.get("play_type") == "punt"
+        ):
+            previous_target = extract_punt_target(str(previous_play.get("raw_text", "")))
+            current_target = extract_punt_target(play_text)
+            if previous_target and current_target and previous_target == field_position == current_target:
+                play_id -= 1
+                continue
+
         if parsed.get("is_fumble") and field_position and not parsed.get("is_interception"):
             recovery_loc = parsed.pop("_fumble_recovery_loc", None)
             start = field_pos_to_abs(field_position, offense)
@@ -779,28 +807,28 @@ def parse_pbp_html(html: str, game: dict[str, str], season: str, run_id: str) ->
             if yardline_match:
                 yardline_raw = int(yardline_match.group(2))
 
-        plays.append(
-            {
-                "run_id": run_id,
-                "season": season,
-                "game_id": game["game_id"],
-                "home_team": home_team,
-                "away_team": away_team,
-                "schedule_home": game.get("schedule_home", ""),
-                "schedule_away": game.get("schedule_away", ""),
-                "play_id": play_id,
-                "drive_id": drive_id,
-                "drive_start_time": drive_start_time or "",
-                "quarter": quarter,
-                "down": down,
-                "distance": distance,
-                "field_position": field_position or "",
-                "yardline_raw": yardline_raw,
-                "offense": offense or "",
-                "defense": defense or "",
-                **parsed,
-                "raw_text": play_text,
-            }
-        )
+        play_row = {
+            "run_id": run_id,
+            "season": season,
+            "game_id": game["game_id"],
+            "home_team": home_team,
+            "away_team": away_team,
+            "schedule_home": game.get("schedule_home", ""),
+            "schedule_away": game.get("schedule_away", ""),
+            "play_id": play_id,
+            "drive_id": drive_id,
+            "drive_start_time": drive_start_time or "",
+            "quarter": quarter,
+            "down": down,
+            "distance": distance,
+            "field_position": field_position or "",
+            "yardline_raw": yardline_raw,
+            "offense": offense or "",
+            "defense": defense or "",
+            **parsed,
+            "raw_text": play_text,
+        }
+        plays.append(play_row)
+        previous_play = play_row
 
     return plays
