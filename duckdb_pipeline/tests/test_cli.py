@@ -3,8 +3,55 @@ import tempfile
 import unittest
 from datetime import datetime, timezone
 
-from duckdb_pipeline.cli import _load_field_position_review_queue, _preseed_memory_crosswalk_rows
+from duckdb_pipeline.cli import (
+    _load_field_position_review_queue,
+    _preseed_memory_crosswalk_rows,
+    main_rebuild_structure_from_raw,
+)
 from duckdb_pipeline.db import connect, init_db, insert_rows
+
+
+STANDINGS_HTML = """
+<html>
+  <body>
+    <h3>Bay 6</h3>
+    <table class="table bg-white">
+      <thead>
+        <tr>
+          <td aria-hidden="true">&nbsp;</td>
+          <th colspan="3">Conference</th>
+          <th colspan="5">Overall</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><a href="/sports/fball/2025-26/schedule?teamId=101"><span class="team-name">Foothill</span></a></td>
+          <td class="stats-col">5</td>
+          <td class="stats-col">4-1</td>
+          <td class="stats-col">.800</td>
+          <td class="stats-col">10</td>
+          <td class="stats-col">8-2</td>
+          <td class="stats-col">.800</td>
+        </tr>
+      </tbody>
+    </table>
+  </body>
+</html>
+"""
+
+SCHEDULE_HOME_HTML = """
+<html>
+  <body>
+    <table>
+      <tr class="event-row home">
+        <td><a href="/sports/fball/2025-26/boxscores/20250906_abcd.xml">Box</a></td>
+        <td class="team opponent"><span class="team-name">San Mateo</span></td>
+        <td class="result">W, 42-7</td>
+      </tr>
+    </table>
+  </body>
+</html>
+"""
 
 
 @unittest.skipUnless(importlib.util.find_spec("duckdb"), "duckdb not installed")
@@ -264,6 +311,90 @@ class CliTests(unittest.TestCase):
             ).fetchall()
             self.assertIn(("g2", "LANEY", "Laney"), rows)
             self.assertIn(("g2", "MODESTO", "Modesto"), rows)
+            conn.close()
+
+    def test_rebuild_structure_from_raw_reparses_without_rescraping(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = f"{tmpdir}/test.duckdb"
+            conn = connect(db_path)
+            init_db(conn)
+            insert_rows(
+                conn,
+                "raw_standings_html",
+                [
+                    {
+                        "run_id": "structure-raw-1",
+                        "season": "2025-26",
+                        "fetched_at": datetime.now(timezone.utc),
+                        "source_url": "https://example.test/standings",
+                        "html_text": STANDINGS_HTML,
+                    }
+                ],
+            )
+            insert_rows(
+                conn,
+                "raw_schedule_html",
+                [
+                    {
+                        "run_id": "structure-raw-1",
+                        "season": "2025-26",
+                        "team_id": "101",
+                        "team_name": "Foothill",
+                        "fetched_at": datetime.now(timezone.utc),
+                        "source_url": "https://example.test/foothill-schedule",
+                        "html_text": SCHEDULE_HOME_HTML,
+                    }
+                ],
+            )
+            insert_rows(
+                conn,
+                "pipeline_runs",
+                [
+                    {
+                        "run_id": "structure-raw-1",
+                        "season": "2025-26",
+                        "stage": "structure",
+                        "started_at": datetime.now(timezone.utc),
+                        "finished_at": datetime.now(timezone.utc),
+                        "status": "completed",
+                        "standings_count": 1,
+                        "schedule_count": 1,
+                        "games_count": 1,
+                        "notes": None,
+                    }
+                ],
+            )
+            conn.close()
+
+            exit_code = main_rebuild_structure_from_raw(
+                [
+                    "--season",
+                    "2025-26",
+                    "--db-path",
+                    db_path,
+                    "--source-structure-run-id",
+                    "structure-raw-1",
+                ]
+            )
+            self.assertEqual(exit_code, 0)
+
+            conn = connect(db_path)
+            standings = conn.execute(
+                "SELECT team_name FROM v_standings_current WHERE season = '2025-26'"
+            ).fetchall()
+            self.assertEqual(standings, [("Foothill",)])
+            games = conn.execute(
+                "SELECT game_id FROM v_games_current WHERE season = '2025-26'"
+            ).fetchall()
+            self.assertEqual(games, [("20250906_abcd",)])
+            latest_stage = conn.execute(
+                """
+                SELECT stage FROM pipeline_runs
+                WHERE season = '2025-26' AND status = 'completed'
+                ORDER BY finished_at DESC LIMIT 1
+                """
+            ).fetchone()[0]
+            self.assertEqual(latest_stage, "structure")
             conn.close()
 
 

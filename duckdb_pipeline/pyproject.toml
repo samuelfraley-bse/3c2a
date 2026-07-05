@@ -7,15 +7,24 @@ dependencies = [
     "beautifulsoup4>=4.12",
     "duckdb>=1.1",
     "requests>=2.31",
+    "python-docx>=1.1",
+    "matplotlib>=3.8",
+    "streamlit>=1.38",
+    "streamlit-aggrid>=1.0",
 ]
 
 [project.scripts]
 scrape_season_structure = "duckdb_pipeline.cli:main"
 scrape_season_plays = "duckdb_pipeline.cli:main_plays"
+rebuild_structure_from_raw = "duckdb_pipeline.cli:main_rebuild_structure_from_raw"
 rebuild_plays_from_raw = "duckdb_pipeline.cli:main_rebuild_plays_from_raw"
+refresh_duckdb_views = "duckdb_pipeline.cli:main_refresh_views"
 prepare_field_positions = "duckdb_pipeline.cli:main_prepare_field_positions"
 resolve_field_position_prefix = "duckdb_pipeline.cli:main_resolve_field_position_prefix"
 apply_field_positions = "duckdb_pipeline.cli:main_apply_field_positions"
+build_weekly_report = "duckdb_pipeline.cli:main_build_weekly_report"
+scrape_lineup_json = "duckdb_pipeline.cli:main_scrape_lineup_json"
+parse_lineup_stats = "duckdb_pipeline.cli:main_parse_lineup_stats"
 
 [build-system]
 requires = ["setuptools>=61.0", "wheel"]

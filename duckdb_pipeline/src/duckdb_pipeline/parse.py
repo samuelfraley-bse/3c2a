@@ -66,6 +66,7 @@ RE_YARDS = re.compile(r"for\s+(loss of\s+)?(\d+)\s+yards?", re.IGNORECASE)
 RE_NO_GAIN = re.compile(r"for no gain", re.IGNORECASE)
 RE_TD = re.compile(r"touchdown", re.IGNORECASE)
 RE_INT = re.compile(r"intercept", re.IGNORECASE)
+RE_SAFETY = re.compile(r"\bsafety\b", re.IGNORECASE)
 RE_TIMEOUT = re.compile(r"^Timeout\s", re.IGNORECASE)
 RE_CLOCK_ONLY = re.compile(r"^clock\s+\d+:\d+\.$", re.IGNORECASE)
 RE_FUMBLE = re.compile(
@@ -274,6 +275,8 @@ def parse_play(text: str) -> dict[str, object]:
         "is_sack": False,
         "is_fumble": False,
         "fumble_recovered_by": None,
+        "is_safety": bool(RE_SAFETY.search(text)),
+        "is_defensive_td": False,
         "is_penalty": False,
         "penalty_team": None,
         "penalty_type": None,
@@ -375,6 +378,9 @@ def parse_play(text: str) -> dict[str, object]:
         play["pass_result"] = "int"
         play["yards_gained"] = 0
         play["tackler_1"], play["tackler_2"] = parse_tacklers(text)
+        # An interception return is unambiguously the defense's touchdown -
+        # no team-name matching needed, unlike the fumble-recovery case below.
+        play["is_defensive_td"] = bool(RE_TD.search(text))
         _stamp_pass_flags(play)
         return play
 
@@ -442,8 +448,16 @@ def parse_standings_html(html: str, season: str, run_id: str) -> list[dict[str, 
     teams: list[dict[str, str]] = []
 
     for table in soup.select("table.table.bg-white"):
-        conf_th = table.select_one("thead th[colspan]")
-        conference = conf_th.get_text(strip=True) if conf_th else "Unknown"
+        conference = "Unknown"
+        heading = table.find_previous(["h3", "h2"])
+        if heading:
+            heading_text = heading.get_text(strip=True)
+            if heading_text and heading_text.lower() not in {"conference", "overall"}:
+                conference = heading_text
+        if conference == "Unknown":
+            conf_th = table.select_one("thead th[colspan]")
+            if conf_th:
+                conference = conf_th.get_text(strip=True)
 
         for row in table.select("tbody tr"):
             link = row.select_one('a[href*="schedule?teamId"]')

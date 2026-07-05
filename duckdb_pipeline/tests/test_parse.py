@@ -12,9 +12,14 @@ from duckdb_pipeline.parse import (
 STANDINGS_HTML = """
 <html>
   <body>
+    <h3>Bay 6</h3>
     <table class="table bg-white">
       <thead>
-        <tr><th colspan="8">Coast</th></tr>
+        <tr>
+          <td aria-hidden="true">&nbsp;</td>
+          <th colspan="3">Conference</th>
+          <th colspan="5">Overall</th>
+        </tr>
       </thead>
       <tbody>
         <tr>
@@ -144,6 +149,7 @@ class ParseTests(unittest.TestCase):
     def test_parse_standings_html(self) -> None:
         rows = parse_standings_html(STANDINGS_HTML, "2025-26", "run-1")
         self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["conference"], "Bay 6")
         self.assertEqual(rows[0]["team_name"], "Foothill")
         self.assertEqual(rows[0]["team_id"], "101")
         self.assertTrue(rows[0]["schedule_url"].endswith("teamId=101"))

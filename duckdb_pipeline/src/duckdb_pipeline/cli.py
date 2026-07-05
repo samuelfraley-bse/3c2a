@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import uuid
 from datetime import datetime, timezone
@@ -17,7 +18,7 @@ from .crosswalk import (
 from .scrape import log, scrape_plays, scrape_structure
 
 
-def _insert_running_run(conn, run_id: str, season: str) -> None:
+def _insert_running_run(conn, run_id: str, season: str, stage: str) -> None:
     from .db import insert_rows
 
     insert_rows(
@@ -27,6 +28,7 @@ def _insert_running_run(conn, run_id: str, season: str) -> None:
             {
                 "run_id": run_id,
                 "season": season,
+                "stage": stage,
                 "started_at": datetime.now(timezone.utc),
                 "finished_at": None,
                 "status": "running",
@@ -106,6 +108,63 @@ def _resolve_source_run_id(conn, season: str, source_run_id: str | None) -> str:
     return row[0]
 
 
+def _resolve_structure_source_run_id(conn, season: str, source_structure_run_id: str | None) -> str:
+    if source_structure_run_id:
+        row = conn.execute(
+            "SELECT COUNT(*) FROM raw_standings_html WHERE season = ? AND run_id = ?",
+            [season, source_structure_run_id],
+        ).fetchone()
+        if row and row[0] > 0:
+            return source_structure_run_id
+        raise RuntimeError(
+            f"No raw_standings_html rows found for season={season} run_id={source_structure_run_id}"
+        )
+
+    row = conn.execute(
+        """
+        SELECT run_id
+        FROM pipeline_runs
+        WHERE season = ?
+          AND status = 'completed'
+          AND stage = 'structure'
+        ORDER BY COALESCE(finished_at, started_at) DESC, run_id DESC
+        LIMIT 1
+        """,
+        [season],
+    ).fetchone()
+    if not row:
+        raise RuntimeError(f"No completed structure runs available for season={season}.")
+    return row[0]
+
+
+def _load_raw_standings_rows(conn, season: str, source_structure_run_id: str) -> list[dict[str, object]]:
+    cursor = conn.execute(
+        """
+        SELECT *
+        FROM raw_standings_html
+        WHERE season = ? AND run_id = ?
+        ORDER BY fetched_at
+        """,
+        [season, source_structure_run_id],
+    )
+    columns = [column[0] for column in cursor.description]
+    return [dict(zip(columns, row)) for row in cursor.fetchall()]
+
+
+def _load_raw_schedule_rows(conn, season: str, source_structure_run_id: str) -> list[dict[str, object]]:
+    cursor = conn.execute(
+        """
+        SELECT *
+        FROM raw_schedule_html
+        WHERE season = ? AND run_id = ?
+        ORDER BY team_name
+        """,
+        [season, source_structure_run_id],
+    )
+    columns = [column[0] for column in cursor.description]
+    return [dict(zip(columns, row)) for row in cursor.fetchall()]
+
+
 def _load_games_rows(conn, season: str, source_run_id: str) -> list[dict[str, str]]:
     cursor = conn.execute(
         """
@@ -178,7 +237,7 @@ def _resolve_plays_run_id(conn, season: str, source_plays_run_id: str | None) ->
         FROM pipeline_runs
         WHERE season = ?
           AND status = 'completed'
-          AND notes LIKE '%"plays_count"%'
+          AND stage = 'plays'
         ORDER BY started_at DESC
         LIMIT 1
         """,
@@ -496,7 +555,7 @@ def main_structure(argv: list[str] | None = None) -> int:
     run_id = str(uuid.uuid4())
     conn = connect(args.db_path)
     init_db(conn)
-    _insert_running_run(conn, run_id, args.season)
+    _insert_running_run(conn, run_id, args.season, stage="structure")
 
     try:
         log(f"RUN   started season={args.season} db={args.db_path} delay={args.delay:.1f}s")
@@ -530,6 +589,90 @@ def main_structure(argv: list[str] | None = None) -> int:
         conn.close()
 
 
+def main_rebuild_structure_from_raw(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        description="Re-parse stored raw standings/schedule HTML into a fresh structure run."
+    )
+    parser.add_argument("--season", default=DEFAULT_SEASON)
+    parser.add_argument("--db-path", default=DEFAULT_DB_PATH)
+    parser.add_argument("--source-structure-run-id", default=None)
+    args = parser.parse_args(argv)
+
+    from .db import connect, init_db, insert_rows
+    from .parse import build_games_rows, parse_schedule_html, parse_standings_html
+
+    run_id = str(uuid.uuid4())
+    conn = connect(args.db_path)
+    init_db(conn)
+    _insert_running_run(conn, run_id, args.season, stage="structure")
+
+    try:
+        source_structure_run_id = _resolve_structure_source_run_id(
+            conn, args.season, args.source_structure_run_id
+        )
+        raw_standings_rows = _load_raw_standings_rows(conn, args.season, source_structure_run_id)
+        if not raw_standings_rows:
+            raise RuntimeError(
+                f"No raw_standings_html rows found for season={args.season} "
+                f"run_id={source_structure_run_id}"
+            )
+        raw_schedule_rows = _load_raw_schedule_rows(conn, args.season, source_structure_run_id)
+        if not raw_schedule_rows:
+            raise RuntimeError(
+                f"No raw_schedule_html rows found for season={args.season} "
+                f"run_id={source_structure_run_id}"
+            )
+
+        log(
+            f"RUN   started reparse structure season={args.season} db={args.db_path} "
+            f"source_structure_run_id={source_structure_run_id}"
+        )
+
+        standings_rows = parse_standings_html(str(raw_standings_rows[0]["html_text"]), args.season, run_id)
+        log(f"PARSE standings -> {len(standings_rows)} teams")
+
+        schedule_rows: list[dict[str, str]] = []
+        for raw_row in raw_schedule_rows:
+            team = {
+                "team_name": str(raw_row["team_name"]),
+                "team_id": str(raw_row.get("team_id") or ""),
+            }
+            schedule_rows.extend(parse_schedule_html(str(raw_row["html_text"]), team, args.season, run_id))
+        log(f"PARSE schedule -> {len(schedule_rows)} rows from {len(raw_schedule_rows)} teams")
+
+        games_rows = build_games_rows(schedule_rows, args.season, run_id)
+        log(f"PARSE games -> {len(games_rows)} unique games")
+
+        insert_rows(conn, "standings", standings_rows)
+        insert_rows(conn, "schedule", schedule_rows)
+        insert_rows(conn, "games", games_rows)
+
+        _finish_completed_run(
+            conn,
+            run_id,
+            standings_count=len(standings_rows),
+            schedule_count=len(schedule_rows),
+            games_count=len(games_rows),
+            notes=json.dumps(
+                {"source_structure_run_id": source_structure_run_id},
+                sort_keys=True,
+            ),
+        )
+        log(
+            f"WRITE reparse standings={len(standings_rows)} "
+            f"schedule={len(schedule_rows)} games={len(games_rows)}"
+        )
+        log(f"DONE  run_id={run_id} db={args.db_path}")
+        return 0
+    except Exception as exc:
+        _finish_failed_run(conn, run_id, exc)
+        log(f"FAIL  run_id={run_id} -> {exc}")
+        print(f"Run failed: {exc}", file=sys.stderr)
+        return 1
+    finally:
+        conn.close()
+
+
 def main_plays(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Scrape game play-by-play into DuckDB.")
     parser.add_argument("--season", default=DEFAULT_SEASON)
@@ -544,7 +687,7 @@ def main_plays(argv: list[str] | None = None) -> int:
     run_id = str(uuid.uuid4())
     conn = connect(args.db_path)
     init_db(conn)
-    _insert_running_run(conn, run_id, args.season)
+    _insert_running_run(conn, run_id, args.season, stage="plays")
 
     try:
         source_run_id = _resolve_source_run_id(conn, args.season, args.source_run_id)
@@ -607,7 +750,7 @@ def main_rebuild_plays_from_raw(argv: list[str] | None = None) -> int:
     run_id = str(uuid.uuid4())
     conn = connect(args.db_path)
     init_db(conn)
-    _insert_running_run(conn, run_id, args.season)
+    _insert_running_run(conn, run_id, args.season, stage="plays")
 
     try:
         source_plays_run_id = _resolve_plays_run_id(conn, args.season, args.source_plays_run_id)
@@ -687,6 +830,22 @@ def main_rebuild_plays_from_raw(argv: list[str] | None = None) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     return main_structure(argv)
+
+
+def main_refresh_views(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Refresh DuckDB tables/views in an existing database file.")
+    parser.add_argument("--db-path", default=DEFAULT_DB_PATH)
+    args = parser.parse_args(argv)
+
+    from .db import connect, init_db
+
+    conn = connect(args.db_path)
+    try:
+        init_db(conn)
+        print(f"Refreshed DuckDB schema/views at {args.db_path}")
+        return 0
+    finally:
+        conn.close()
 
 
 def main_prepare_field_positions(argv: list[str] | None = None) -> int:
@@ -821,7 +980,7 @@ def main_apply_field_positions(argv: list[str] | None = None) -> int:
     run_id = str(uuid.uuid4())
     conn = connect(args.db_path)
     init_db(conn)
-    _insert_running_run(conn, run_id, args.season)
+    _insert_running_run(conn, run_id, args.season, stage="field_position")
 
     try:
         source_plays_run_id = _resolve_plays_run_id(conn, args.season, args.source_plays_run_id)
@@ -865,6 +1024,171 @@ def main_apply_field_positions(argv: list[str] | None = None) -> int:
     except Exception as exc:
         _finish_failed_run(conn, run_id, exc)
         raise
+    finally:
+        conn.close()
+
+
+def main_build_weekly_report(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Build the 4-page weekly coach report as a .docx.")
+    parser.add_argument("--season", default=DEFAULT_SEASON)
+    parser.add_argument("--db-path", default=DEFAULT_DB_PATH)
+    parser.add_argument("--team", required=True)
+    parser.add_argument("--opponent", required=True)
+    parser.add_argument("--week", type=int, required=True)
+    parser.add_argument("--out", required=True, help="Output .docx path.")
+    parser.add_argument(
+        "--charts-dir",
+        default=None,
+        help="Directory for generated chart PNGs (default: alongside --out).",
+    )
+    args = parser.parse_args(argv)
+
+    if os.path.exists(args.out):
+        raise RuntimeError(f"Refusing to overwrite existing report file: {args.out}")
+
+    from .db import connect, init_db
+    from .report_build import build_weekly_report
+
+    charts_dir = args.charts_dir or os.path.join(os.path.dirname(args.out) or ".", "report_charts")
+
+    conn = connect(args.db_path)
+    init_db(conn)
+    try:
+        out_path = build_weekly_report(
+            conn,
+            args.season,
+            args.team,
+            args.opponent,
+            args.week,
+            args.out,
+            charts_dir,
+        )
+        print(f"Wrote {out_path}")
+        return 0
+    finally:
+        conn.close()
+
+
+def main_scrape_lineup_json(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        description=(
+            "Fetch the PrestoSports S3-hosted JSON sources (team/players/teams/"
+            "metadata-legend) discoverable from one team's print-view page. "
+            "players/teams are conference-wide, so one team is enough to cover all."
+        )
+    )
+    parser.add_argument("--season", default=DEFAULT_SEASON)
+    parser.add_argument("--db-path", default=DEFAULT_DB_PATH)
+    parser.add_argument("--team-slug", default="foothill")
+    parser.add_argument("--delay", type=float, default=20.0)
+    args = parser.parse_args(argv)
+
+    from .db import connect, init_db, insert_rows
+    from .lineup_scrape import fetch_lineup_json_sources
+
+    run_id = str(uuid.uuid4())
+    conn = connect(args.db_path)
+    init_db(conn)
+    _insert_running_run(conn, run_id, args.season, stage="lineup_json")
+
+    try:
+        log(
+            f"RUN   started lineup_json season={args.season} "
+            f"team_slug={args.team_slug} delay={args.delay:.1f}s"
+        )
+        rows = fetch_lineup_json_sources(args.season, args.team_slug, args.delay)
+        for row in rows:
+            row["run_id"] = run_id
+        insert_rows(conn, "raw_lineup_json", rows)
+        source_kinds = [row["source_kind"] for row in rows]
+        _finish_completed_run(
+            conn,
+            run_id,
+            notes=json.dumps({"team_slug": args.team_slug, "source_kinds": source_kinds}, sort_keys=True),
+        )
+        log(f"DONE  run_id={run_id} db={args.db_path} sources={source_kinds}")
+        return 0
+    except Exception as exc:
+        _finish_failed_run(conn, run_id, exc)
+        log(f"FAIL  run_id={run_id} -> {exc}")
+        print(f"Run failed: {exc}", file=sys.stderr)
+        return 1
+    finally:
+        conn.close()
+
+
+def _resolve_lineup_json_run_id(conn, season: str, source_run_id: str | None) -> str:
+    if source_run_id:
+        row = conn.execute(
+            "SELECT COUNT(*) FROM raw_lineup_json WHERE season = ? AND run_id = ? AND source_kind = 'players_json'",
+            [season, source_run_id],
+        ).fetchone()
+        if row and row[0] > 0:
+            return source_run_id
+        raise RuntimeError(f"No players_json row found for season={season} run_id={source_run_id}")
+
+    row = conn.execute(
+        """
+        SELECT run_id
+        FROM pipeline_runs
+        WHERE season = ?
+          AND status = 'completed'
+          AND stage = 'lineup_json'
+        ORDER BY COALESCE(finished_at, started_at) DESC
+        LIMIT 1
+        """,
+        [season],
+    ).fetchone()
+    if not row:
+        raise RuntimeError(f"No completed lineup_json runs available for season={season}. Run scrape_lineup_json first.")
+    return row[0]
+
+
+def main_parse_lineup_stats(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        description="Parse a stored players_json blob (raw_lineup_json) into player_lineup_stats."
+    )
+    parser.add_argument("--season", default=DEFAULT_SEASON)
+    parser.add_argument("--db-path", default=DEFAULT_DB_PATH)
+    parser.add_argument("--source-run-id", default=None, help="raw_lineup_json run_id; defaults to the latest completed lineup_json run.")
+    args = parser.parse_args(argv)
+
+    from .db import connect, init_db, insert_rows
+    from .lineup_parse import parse_players_json
+
+    run_id = str(uuid.uuid4())
+    conn = connect(args.db_path)
+    init_db(conn)
+    _insert_running_run(conn, run_id, args.season, stage="lineup_stats")
+
+    try:
+        source_run_id = _resolve_lineup_json_run_id(conn, args.season, args.source_run_id)
+        log(f"RUN   started lineup_stats season={args.season} source_run_id={source_run_id}")
+
+        row = conn.execute(
+            "SELECT json_text FROM raw_lineup_json WHERE season = ? AND run_id = ? AND source_kind = 'players_json'",
+            [args.season, source_run_id],
+        ).fetchone()
+        if not row:
+            raise RuntimeError(f"No players_json row found for season={args.season} run_id={source_run_id}")
+
+        player_rows = parse_players_json(row[0], args.season, run_id)
+        insert_rows(conn, "player_lineup_stats", player_rows)
+        _finish_completed_run(
+            conn,
+            run_id,
+            notes=json.dumps(
+                {"source_lineup_json_run_id": source_run_id, "player_count": len(player_rows)},
+                sort_keys=True,
+            ),
+        )
+        log(f"DONE  run_id={run_id} db={args.db_path} players={len(player_rows)}")
+        return 0
+    except Exception as exc:
+        _finish_failed_run(conn, run_id, exc)
+        log(f"FAIL  run_id={run_id} -> {exc}")
+        print(f"Run failed: {exc}", file=sys.stderr)
+        return 1
     finally:
         conn.close()
 

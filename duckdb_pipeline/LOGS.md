@@ -1,6 +1,255 @@
 # DuckDB Pipeline Log
 
+## 2026-07-05
+
+### Dashboard aesthetics/UX pass: labels, widths, stripes, nested tabs, top filter bar
+- User feedback after using the dashboard: raw column names (`comp_pct`) instead of readable labels, every column the same too-wide width, no visual row separation, Team/Grain as radio buttons while Passing/Rushing were already tabs, and filters buried in a sidebar list.
+- `dashboard_app.py`: added `COLUMN_LABELS`/`COLUMN_WIDTHS` dicts (readable headers, narrower widths for short count stats like `pass_att`/`pass_td` vs. more room for rate columns and longer labels), applied per-column via `gb.configure_column(...)`; unlisted columns fall back to a humanized default (`col.replace("_", " ").title()`) rather than ever silently showing a raw variable name. Dropped the blanket `minWidth` from 130 to 90.
+- Added zebra row striping via `grid_options["getRowStyle"]` (AG-Grid doesn't stripe by default in the `streamlit` theme) — a `JsCode` callback keyed on `rowIndex % 2`.
+- Replaced the `st.radio()` Team (Offense/Defense) and Grain (Season/Game) selectors with nested `st.tabs()`, so the whole page is one consistent tab hierarchy: Team → Grain → Passing/Rushing (confirmed Streamlit 1.58 nests tabs fine). Accepted tradeoff: all 8 tab-body combinations' queries now run on every rerun (already true for Passing/Rushing before this), not just the 2 previously visible — fine for a local, single-user, DuckDB-backed tool.
+- Moved every data filter (season/week/offense/defense/quarter/down/score-margin/distance/drive-number) from the sidebar into a two-row `st.columns(...)` bar across the top of the main page. `Database path` is the one thing left in the sidebar, since it's a connection setting, not a data filter.
+- **Found and fixed a real Rank-column bug from live use**: sorting `pass_yds` ascending, the ranks weren't monotonic (should decrease as yards increase, but jumped around for most rows, with only the last few visible rows correctly ordered). Root cause: AG-Grid doesn't automatically re-invoke a column's `valueGetter` for already-rendered row nodes when the sort changes — only rows freshly drawn into view via virtualization (e.g. newly scrolled into the viewport) get the recomputed value, leaving already-rendered rows showing Rank as of the *previous* sort. Fixed with `grid_options["onSortChanged"]`/`["onFilterChanged"]` handlers that call `params.api.refreshCells({force: true})`, forcing every cell to recompute after any sort or filter change — this is a pure client-side JS wiring, no Python/Streamlit involvement, consistent with `update_on=[]` keeping all of this off the Python round-trip.
+- Verified: `uv run python -c "import duckdb_pipeline.dashboard_app"` imports cleanly; full test suite (56 tests, unrelated to this presentation-only change) still passes; `streamlit run` against a scratch copy starts and responds `200`. **Not verified by me**: the actual visual result (label/width/stripe appearance, tab nesting, top filter bar layout) and whether the Rank refresh fix fully resolves the staleness in a real browser — needs the user's own click-through, same limitation as every prior UI change this session.
+
+### Analyst dashboard implemented (Streamlit + AG-Grid)
+- Built the dashboard from `DASHBOARD_SPEC.md` (logged below): `dashboard_data.py` (pure query layer, no Streamlit import, mirrors `report_data.py`'s separation of concerns) + `dashboard_app.py` (Streamlit UI, presentation-only).
+- Chose Streamlit + `streamlit-aggrid` over Tableau/QuickSight: reuses the same DuckDB connection/query style already in this codebase, runs entirely locally (`uv run streamlit run src/duckdb_pipeline/dashboard_app.py`), no hosting/account/cost. QuickSight was ruled out outright — it wants data in S3/Athena/Redshift and per-user cloud billing, solving a hosting/multi-user problem this project doesn't have.
+- `dashboard_data.py::load_team_stats(conn, *, side, grain, family, season, ...)` builds one parameterized query per call against `v_play_context_current` directly (not the existing `v_team_season/game_offense/defense_(ranked_)current` views) — those pre-built views are fixed full-season/game aggregates and can't accept fresh row-level filters (quarter/down/distance/score-margin) ahead of their own `GROUP BY`. This means the metric formulas are **re-expressed** here, not referenced — an accepted, deliberate duplication (not an oversight), guarded against drift by `tests/test_dashboard_data.py`, which asserts that with no situational filters applied, this module's output exactly matches the canonical views' output for the same plays. All 6 new tests passed on the first run, load-bearing evidence the two implementations agree.
+- All filter values are bound SQL parameters (`?`), never string-interpolated; only `side`/`grain`/`family` (a small fixed enum, never derived from user input) drive which SQL text gets assembled — no injection surface despite the query being built dynamically.
+- The dashboard opens its own **read-only** `duckdb.connect(db_path, read_only=True)` directly, bypassing `db.py`'s `connect()`/`init_db()` (which issues schema-mutating DDL a read-only connection can't run, and which the dashboard has no business doing anyway — schema/view refresh stays a pipeline-CLI concern).
+- Rank column: implemented as an AG-Grid `valueGetter` (`node.rowIndex + 1`) via `JsCode`, so it reflects whatever the grid is currently sorted by — deliberately not a precomputed SQL `_rank` column (those stay as-is for the static docx report, where there's no interactivity to hang a dynamic rank off of).
+- Verified: `uv run python -c "import duckdb_pipeline.dashboard_app"` imports cleanly; `streamlit run` against a scratch copy of the real DB starts the server and responds `200` on the initial HTTP request. **Not verified by me**: full interactive click-through (filter widgets, tab switching, live sort/reorder behavior in the browser) — that needs an actual browser session, which isn't available in this environment. The query-layer correctness is what's actually load-bearing here, and that's covered by the 6 passing unit tests; the UI itself should be manually clicked through before relying on it.
+- **Two UI bugs found from actual manual use** (first real click-through, run against the real `data/foothill.duckdb`): headers truncating to e.g. `"V..."`, and sorting visibly working for an instant then snapping back to the old order.
+  - First-pass fix (`fit_columns_on_grid_load=False`, `update_mode=GridUpdateMode.NO_UPDATE`) **did not actually work** — those are an older `streamlit-aggrid` API. The installed version (1.2.1.post2) doesn't expose `fit_columns_on_grid_load` as a real `AgGrid()` parameter at all (it's silently swallowed), and its real rerun-control is a different parameter, `update_on`, not `update_mode`. Root-caused properly the second time by inspecting the actual installed `AgGrid()` signature and the literal dict `GridOptionsBuilder.build()` produces, rather than trusting remembered API shape from an unpinned version.
+  - Real cause of the width bug: `GridOptionsBuilder.build()` **always** sets `autoSizeStrategy: {"type": "fitGridWidth"}` in the returned dict, regardless of anything passed to `AgGrid()` — that's what squeezed every column to fit the visible width and fired the "grid coming back with zero width" console warning for whichever tab wasn't currently active. Fixed by overriding `grid_options["autoSizeStrategy"] = {"type": "none"}` directly on the dict after `build()`, since there's no builder method for it.
+  - Real cause of the sort-reset bug: `AgGrid()`'s actual default `update_on=['cellValueChanged', 'selectionChanged', 'filterChanged', 'sortChanged']` — `sortChanged` being in that list means every sort click reran the whole Streamlit script and rebuilt `gridOptions` from scratch, discarding the sort that had just visibly applied. Fixed with `update_on=[]`: sorting/filtering/resizing are pure client-side grid state that never needs to round-trip through Python at all.
+
+### Rank column made direction-aware (best-by-metric, not just row position)
+- User request: sorting `pass_int` ascending should put the team with the *fewest* interceptions at Rank 1 — even though that row is now at the bottom of the visible (ascending) list. A plain `rowIndex + 1` can't express that; it needs to know each metric's direction of "better."
+- Added `dashboard_data.OFFENSE_METRIC_DIRECTION` (True=higher-is-better, False=lower-is-better, None=neutral/count-only stat like `games`/`pass_att`/`dropbacks`) and `metric_direction_for_side(side)`, which inverts every non-neutral entry for Defense tabs — same column name means "allowed"/"forced" there instead of "gained"/"taken" (e.g. `pass_yds` is higher-is-better on Offense, lower-is-better on Defense; `pass_int`/`sacks`/`run_stuff_rate` flip the other way, since those are good things for a defense to force). Ported the direction choices directly from the existing `RANK()` columns already in `db.py`'s `v_team_season_offense_ranked_current`/`_defense_ranked_current`, not reinvented.
+- `dashboard_app.py::_rank_value_getter(side)` builds a `JsCode` valueGetter that reads the grid's current sort state via `params.api.getColumnState()`, looks up the sorted column's direction in the embedded map (JSON-serialized straight from the Python dict), and only reverses row position (`total - idx` instead of `idx + 1`) when the current sort direction doesn't already put the best team first. Columns with no direction entry (team_name, game_id, week) just fall back to plain row position, which is the only sensible behavior for a non-metric column anyway.
+- Added `MetricDirectionTests` in `tests/test_dashboard_data.py` (pure-function tests, no DB needed) covering: offense map unchanged, defense inverts non-neutral entries correctly (spot-checked `pass_yds` and `pass_int` by name, not just presence), neutral entries stay neutral on both sides, invalid `side` raises. Full suite: 54 tests passing.
+
+### Game grain: added `opponent`; pinned Rank + Team columns
+- User request: on Game-grain tabs, show who each row's team actually played that game, and keep Rank/Team visible while scrolling through the (now horizontally-scrolling, since the width-squeeze fix) stat columns.
+- `dashboard_data.load_team_stats`: when `grain="game"`, the inner query now also selects `MAX({opponent-side column}) AS opponent` (the other team in that specific game — safe as a `MAX()` since every play in a team's game row shares the same opponent) and passes it through in the outer `SELECT`. Season-grain rows deliberately do **not** get an `opponent` column — a team faces a different opponent every week at that grain, so there's no single value to show. Added `test_game_grain_includes_opponent` (checks both offense- and defense-side output) and `test_season_grain_has_no_opponent_column` to lock this in; all 56 tests passing.
+- `dashboard_app.py::render_grid`: pinned the `team_name` column (`headerName="Team"`) to the left, alongside the already-pinned Rank column, via `GridOptionsBuilder.configure_column(..., pinned="left")`.
+- Updated `DASHBOARD_SPEC.md` to reflect both the `opponent` column and the actual (direction-aware) Rank behavior, since the original spec's description was simpler than what was ultimately built based on live feedback.
+
+### Analyst dashboard spec (DASHBOARD_SPEC.md) — content locked before choosing a tool
+- Motivation: after the view-stabilization pass below, the user wanted to step back from automating more reports and build a click-through analyst dashboard instead — the original plan before reports took over. Wrote `DASHBOARD_SPEC.md` to lock down tabs/metrics/filters as a documentation-only deliverable, deliberately before picking any dashboard tool.
+- Key insight (the user's own): filters like quarter/score-margin/down/distance/drive-number aren't a separate architectural tier — they're just additional `WHERE` clauses on `v_play_context_current` ahead of the same team-level aggregation already used everywhere else in this schema. One parameterized query per tab, not a combinatorial pile of new views.
+- 8 tabs: Team Offense/Defense × Season/Game × Passing/Rushing. Season and Game are genuinely different `GROUP BY` grains (`team` alone vs. `team, game_id`), not the same query with a filter toggled — caught and corrected mid-review after an earlier draft wrongly collapsed them.
+- Rank column: one dynamic column reflecting whatever the table is currently sorted by (a UI/grid concern), not a database column — deliberately does not reuse the existing per-metric `<metric>_rank` window-function columns built for the static docx report.
+- `drive_id` used as-is for the "drive number" filter (single sequential counter per game, shared across both teams' possessions) — confirmed with the user, no per-team-possession transform needed.
+- Explicitly out of scope for v1: dashboard tool choice, PPG, Team Leaders tabs, any write/edit capability.
+
+### Stabilized gold views before building the report: drives, points/PPG, explosive/success/stuff rates, schedule running record
+- Motivation: before writing any report/export code for the weekly coach report (modeled on `reports/Wk1-Butte-template.pdf`), wanted a stable, fact-checkable view layer first — `plays`, `drives`, `games`, `schedule`, `lineups` — so numbers can be manually validated against the template's known-good figures before anything gets built on top. `plays` (`v_plays_current`/`v_play_context_current`) and `lineups` (`v_player_lineup_stats_current`) were already stable; this pass covers the rest.
+- **Clarified the `run_id`/append-only question for future iteration**: it only applies to Python-parsed silver tables (`plays`, `player_lineup_stats`) — never to SQL views. Views have no run_id of their own; editing a `CREATE OR REPLACE VIEW` and re-running `refresh_duckdb_views` is instant and lossless. `plays`/`lineups` are append-only by design (audit trail, safe rollback if a parse change regresses something) and already cheap to re-iterate via `rebuild_plays_from_raw`/`parse_lineup_stats`, which re-parse from already-fetched raw data rather than rescraping.
+- **Exposed `offense_points`/`defense_points`** as real columns on `v_play_context_current` — the private `scoring_totals` CTE already computed these (FG/PAT/2pt/safety/pick-six/disputed-fumble-recovery-TD, via the `field_position_crosswalk` join) but only fed them into the windowed `home_score`/`away_score` sums, never surfaced them. Zero new logic, just carried two already-computed values one level further out — this unblocks both PPG and drive-scoring below without duplicating the crosswalk join anywhere else.
+- **New points-per-game view chain**: `v_team_game_points_current` (via a `UNION ALL` of the offense-role and defense-role arms, so a team's own defensive scoring — safety/pick-six — correctly lands as that team's own points, not the opponent's) → `v_team_season_points_current` → `v_team_season_points_ranked_current` (`ppg`/`ppg_allowed`, ranked).
+- **New combined success/explosive/stuff-rate columns**, additive on the existing offense/defense game→season→ranked view chain: combined (pass+rush) `success_rate`/`explosive_rate` (previously only pass-only/rush-only versions existed), split `rush_explosive_rate`/`pass_explosive_rate`, and `run_stuff_rate` (`stuffed_runs/rush_att` — `stuffed_runs` was already summed through to the season view but never turned into a rate). Needed `rush_explosive`/`pass_explosive` sums added at the game-view level first (the per-play booleans already existed on `v_play_context_current`, just never aggregated).
+- **New drive-level rollup**, built entirely from `plays.drive_id` (already existed, nothing ever grouped by it): `v_drives_current` → `v_team_game_drives_offense_current`/`_defense_current` → season → ranked. Starting field position per drive via `ARG_MIN(yardline_100, play_id)` (first play of the drive, using the same `play_id` chronological-ordering convention `game_score_state`'s window already relies on).
+  - **3-and-out definition (explicit user decision)**: `scrimmage_plays <= 3 AND NOT is_scoring_drive` — covers both a punt after ≤3 snaps and a turnover-on-downs after ≤3 snaps, does not require the drive to literally end in a punt.
+  - **Naming decision**: the defense-side drive view uses the *same* column names as the offense side (no `opp_` prefix), because `drives_three_and_out` on defense means drives *forced* into a 3-and-out — good, not bad — unlike every other `opp_*` column in this schema where higher means worse for the team described. Reusing `opp_` here would have been actively misleading.
+  - Season rollups carry raw per-game sums (`total_scrimmage_plays`, `total_start_yardline_100`), not pre-averaged per-game rates, so the season view is a plain `SUM/SUM` — same weighting discipline already established for `avg_distance` (`distance_sum`/`distance_n`), no average-of-averages bug.
+  - This also makes the previously-noted "Drive Summary tab (`view=drives`) would be a good future HTML-parsing target" idea (see the PrestoSports JSON entries below) unnecessary — `plays.drive_id` was already sufficient.
+- **Schedule running record**: `v_schedule_current` now exposes `wins_entering_game`/`losses_entering_game`/`ties_entering_game` — the team's running overall record *entering* each game (not including it), parsed from `schedule.result` (`"W, 42-7"`/`"L, 7-42"`) via the same `ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING` window pattern as `game_score_state`.
+  - **Known gap, documented rather than silently dropped**: this is the *overall* record only. There's no per-game conference-game flag anywhere in this pipeline (`v_standings_current`'s conference totals come from a separately-scraped season-end row, not derived from individual `schedule` rows), so a conference-specific running record entering each game isn't derivable without new data.
+- Added 3 new fixture-based tests to `test_db.py` (points/rates, drives, schedule record), each hand-computed and verified against the SQL independently before running — all passed on the first attempt, a good sign the view logic matches the intended semantics. Full suite: 44 tests passing.
+- **Real-data spot-check against a scratch copy of `data/foothill.duckdb`** (never the real file directly): PPG, combined success/explosive rates, run-stuff rate, and schedule running record all check out for Foothill (`ppg=20.7`, `success_rate=35.1%`, etc. — all plausible, correctly ranked among ~66-70 conference teams); the pre-existing, already-validated `pass_pct`/`rush_pct` numbers (`44.5%`/`60.4%`) are unchanged, confirming the additive edits didn't disturb anything.
+  - **Found a real, pre-existing data-staleness bug this surfaced (not introduced by this session's changes)**: `avg_start_yardline_100` came back `NULL` for every team. Root cause: `yardline_100` is `NULL` for **100% of plays** in the current view, because `play_field_positions.source_plays_run_id` (frozen to whichever `plays` run existed when the `field_position` stage last ran) no longer matches the *current* `plays` run_id — the `plays` pipeline has been reparsed/rebuilt several times since (12 completed `plays`-stage runs vs. only 2 `field_position`-stage runs), so the join in `v_play_context_current` matches zero rows. Every other new metric in this pass is unaffected (none of them depend on `yardline_100` except this one column), and the view degrades gracefully (`NULL`, not a crash). Fixing this means re-running the multi-step field-position pipeline (`prepare_field_positions` → prefix review → `resolve_field_position_prefix` → `apply_field_positions`) against the current `plays` run — a real, separate follow-up task, not something to silently patch here.
+
+### players_json parsed into player_lineup_stats (Team Leaders silver table)
+- Built the silver layer on top of `raw_lineup_json`'s `players_json` rows, per the scope decision logged earlier today (Team Leaders is the primary near-term use case for this source).
+- `lineup_parse.py` (new): `POSITION_GROUP_MAP` (hardcoded, decoded from `metaData/0.json`'s `positions` key — `FB`/`HB`/`SB`/`TB` → `rb`, `TE` → `wr`, `DL`/`LB`/`DB` → `d`, else `"other"`) and `parse_players_json(json_text, season, run_id) -> list[dict]`. Pure function, no DB/network dependency, mirrors `parse.py`'s separation of concerns.
+- **One wide table, not per-position tables**: `player_lineup_stats` has every stat column (passing/rushing/receiving/defense) for every player regardless of `position_group` — a QB's incidental rushing still populates `rush_*`. `position_group` is for classification/filtering, not a gate on which columns get filled. Deliberately excludes kicking/punting/return categories — not needed for Team Leaders.
+- Parsed once at ingest time into a real table (not a live SQL view over the raw JSON) — the source blob is ~20MB, re-parsing it on every query would be wasteful, unlike the columnar tables the rest of this pipeline's views compute over.
+- Added `v_current_lineup_stats_runs` (new `pipeline_runs.stage = 'lineup_stats'`) and `v_player_lineup_stats_current`, mirroring the existing `v_current_plays_runs`/`v_plays_current` pattern exactly.
+- New CLI command `parse_lineup_stats --season --source-run-id` (defaults to the latest completed `stage='lineup_json'` run), reading the stored `players_json` blob and inserting into `player_lineup_stats`.
+- **Found and fixed one field-mapping bug before it shipped**: initially mapped `rec_ypg` to `watg`, but `watg` is receptions/game, not yards/game — `wyg` is yards/game. Caught by re-checking the exact legend text already recorded in this log rather than trusting memory, before writing any tests against it.
+- Added `tests/test_lineup_parse.py`: a hand-built `players_json` fixture with a QB (passing + incidental rushing), a linebacker (tackles/sacks/etc.), and an offensive lineman (a real position with no individual stat category at all — exercises the `"other"` fallback instead of crashing). Covers both the pure parser and the `player_lineup_stats` → `v_player_lineup_stats_current` DB round-trip. Full suite: 41 tests passing.
+- Validated end-to-end against a scratch copy of the live database: re-ran `scrape_lineup_json` (fresh fetch, 20s delays, no rate-limiting) then `parse_lineup_stats`; confirmed 86 Foothill rows, and James Maxwell's row exactly matches both the raw JSON inspected earlier this session and this project's own independently plays-derived `v_player_season_passing_current` (`pass_att=169, pass_comp=91, pass_yds=1028, pass_td=8, pass_int=3, pass_rating=117.0`).
+
+### New source discovered: PrestoSports official season-stats JSON (Team Leaders)
+- Motivation: wanted official Team Leaders (Passing/Rushing/Receiving/Tackles/Sacks) for the weekly coach report without depending on the raw `plays.passer`/`rusher`/`receiver` text-grouping approach (session's earlier passer-rating work), and without the never-run, ~3.5-hour `pipeline/10_scrape_lineup.py` overnight scrape against `cccaa.prestosports.com` (which is Cloudflare-protected and only extracts player name+slug, not actual stat lines, even where it does work).
+- Discovery path (all confirmed live against `foothill`, via a manually-saved `manual/2025-26 Football Statistics - Foothill - 2025-26 - 3C2A - Print Version.html`):
+  1. `https://3c2asports.org/sports/fball/{season}/teams/{team_slug}?tmpl=teaminfo-network-monospace-json-template` — a lightweight "print version" page. **Not Cloudflare-blocked** with a normal browser `User-Agent` header (unlike the old script's `cccaa.prestosports.com/.../teams/{slug}?view=season&pos={pos}` pages, which return a `403`/Cloudflare challenge from this environment). This page embeds a `ps.rendering.team.initialize(...)` call with several S3 URLs.
+  2. That call includes `teamDataEndp` (e.g. `.../teamData/an42fqq3u1wiedd5.json`) — fetching it gives `sportCode` (`0` for football) and `attributes.teamId`, needed for the next step.
+  3. `playersDataEndp` (e.g. `.../playersData/agwhctziptolcaqc.json`) is a **single ~20MB JSON file containing every player in the conference for the season** (5,179 individuals in the 2025-26 file) — not just one team. Confirmed via `team-page-rendering.js`: the site's own client-side JS does `playersData.individuals.filter(player => player.teamId === teamData.attributes.teamId)` to scope it down to one team in the browser. **One fetch of this file covers all 66 teams** — no per-team or per-position looping needed at all, unlike the old script's design.
+  4. The abbreviated stat keys (`pa`, `ryd`, `dtt`, etc.) inside each player's `stats` object are defined in a legend file at `.../metaData/{sportCode}.json` (`sportCode` from step 2 — literally `metaData/0.json` for football). Its `briefs` key gives the full field-name legend, one object per position group (`qb`, `rb`, `wr`, `k`, `p`, `kr`, `d`, plus combined `allp`/`pts`/`all`), and `labels` gives the human-readable names for the same keys.
+- **Cross-validated against this session's own plays-derived `v_player_season_passing_current`**: James Maxwell's official line (169 att, 91 comp, 1028 yds, 8 TD, 3 INT, **117.0 passer rating**) matches our independently plays-derived numbers for the same player almost exactly. Good evidence both the new source and the existing plays-derived pipeline are trustworthy.
+- Decoded field legend (from `metaData/0.json` → `briefs`), the fields needed for Team Leaders:
+  - **Passing (`qb`)**: `gp`, `pc`=completions, `pa`=attempts, `ppt`=comp%, `pyd`=yards, `pyg`=yards/game, `pya`=yards/att, `ptd`=TD, `pin`=INT, `plg`=long, `peff`=passer rating (NCAA formula, matches our own `passer_rating`)
+  - **Rushing (`rb`)**: `gp`, `rat`=rush attempts, `ryd`=yards, `ryg`=yards/game, `rya`=yards/rush, `rtd`=TD, `rlg`=long, `fum`=fumbles, `fuml`=fumbles lost
+  - **Receiving (`wr`)**: `gp`, `wat`=receptions, `watg`=rec/game, `wyd`=yards, `wyg`=yards/game, `wya`=yards/catch, `wtd`=TD, `wlg`=long
+  - **Defense (`d`)**: `gp`, `dtu`=solo tackles, `dta`=assisted tackles, `dtt`=total tackles, `dtpg`=tackles/game, `dst`=sacks, `dsyd`=sack yards, `tfl`=tackles for loss, `dff`=forced fumbles, `dfr`=fumble recoveries, `di`=interceptions, `dbru`=pass breakups, `dblk`=blocked kicks
+  - (also decoded but not immediately needed: `k` kicking, `p` punting, `kr`/`pr` returns)
+  - Each `individual` record also carries `firstName`/`lastName`/`fullName`, `team`, `teamId`, `playerId` (stable ID), `uniform` (jersey #), `position`/`positionAbbreviation`, `year` (class) — meaningfully richer identity than anything derivable from raw PBP text, and sidesteps the player-name-crosswalk problem entirely for this purpose.
+- Added bronze table `raw_lineup_json` to `db.py` (`run_id`, `season`, `source_kind` — `'players_json'` or `'metadata_legend_json'`, `fetched_at`, `source_url`, `json_text`). Schema only for now — no scraper or parser built yet, this just registers the new source and its raw storage shape. Silver-layer parsing (into a proper `player_season_stats` table or similar) and the actual fetch/ingest command are follow-up work.
+- Explicitly **not** pursuing the old `pipeline/10_scrape_lineup.py` approach further for this need — it's Cloudflare-blocked from this environment, was never run to completion for 2025-26, and only captured name+slug even where reachable. This new source is faster (2 lightweight requests total instead of 462 = 66 teams × 7 positions), not blocked, and richer (real stat lines, not just identity).
+
+### Same source, more endpoints: per-game box scores and player game logs
+- Followed up on the discovery above by digging into what else this JSON ecosystem exposes, since the rendering pattern (a page embeds a `ps.rendering.X.initialize(...)` call pointing at S3 JSON files) repeats across page types.
+- **`teamData` includes `events[]`** — the team's full schedule, each entry with a `boxScoreLink` (e.g. `20250906_tjag.xml`, the *same* `game_id` convention already used everywhere in this pipeline) and, for completed games, **an embedded `stats` object that is a full per-game team box score** (points, total yards, comp-att-int, rushing yards, time of possession, penalties — both for the team and, via an `opp`-suffixed key of the same name, the opponent).
+  - This is the "box score layer" recommended as future work in the 2026-06-30 entry below (`raw_boxscore_html`, `box_score_team_stats`) — except the data is already sitting in JSON here, no new scrape/parse needed.
+  - Cross-checked against the known swapped-offense/defense bug (`DATABASE_PLAN.md`: Foothill vs Redwoods `20250906_tjag` showed "173 PBP yards vs 317 official"). This box score's `ofyds` for that exact game reads **317** — an exact match, confirming this source can validate (and help pinpoint) that whole class of bug across the season, not just the one flagged game.
+- **Individual players have their own per-game logs too, at a different endpoint than the shared season file.** A player's own profile page (`/sports/fball/{season}/players/{pageName}`, e.g. `/players/jamesmaxwell84ph`) loads `player-page-rendering.js` (singular — distinct from `players-page-rendering.js`, which handles the conference-wide leaderboard), which points at a **per-player** `playerData/{hash}.json` (singular — distinct from the shared `playersData`). That file has its own `events[]` array with a per-game `stats` object: confirmed real, game-by-game numbers for James Maxwell (e.g. his `20250906_tjag` line: `pa:26, pc:10, pyd:140, peff:83.7`, matching that specific game, not his season total). This is authoritative *weekly* per-player data — previously we could only get this by re-deriving from `plays`.
+- **`teamsData` is the conference-wide team season-totals file** — all 70 teams' full season stat lines in one ~1MB JSON. Cross-checked Foothill's entry: `rat:408, ray:"408-1520"` (408 rush attempts, 1520 rush yards) — an exact match to what this session already independently computed from `plays`. Useful as a second validation source for the team-season views, though it doesn't expose anything not already derivable ourselves.
+- **Confirmed negative: no play-level (down-by-down) source exists in this ecosystem.** Fetched the actual boxscore/PBP page directly (`https://3c2asports.org/sports/fball/{season}/boxscores/{game_id}.xml`) — despite the `.xml` filename convention, it returns `content-type: text/html` and has **no `ps.rendering` initialization or S3 JSON reference at all**, unlike every team/player stats page. This page is old-style server-rendered HTML. The existing scraper's HTML/regex-based `parse_pbp_html` remains the only path to real play-by-play data; this discovery doesn't change or improve that.
+- Net assessment: this source is a clear upgrade for box scores and player/team stat leaders (official numbers, stable IDs, ~4 lightweight non-blocked requests total for a whole season instead of hundreds of blocked ones) but is a complementary source, not a replacement for the plays scraper.
+- **Follow-up: confirmed the box-score/game-detail page family has no JSON backing either, with real (unblocked, delayed) requests.** The box score page (`boxscores/{game_id}.xml`, both bare and `?view=plays`) exposes four tabs total — `plays`, `drives`, `participation`, `starters` (the `participation` tab confirms it's the same page family the old `pipeline/02_scrape_participation.py` already scrapes) — and every one of them is plain server-rendered HTML with no `ps.rendering` call and no S3 references, same as the base page. This is a genuinely different, older subsystem than the team/player stats pages. No JSON shortcut exists for play-by-play, drives, participation, or starters — confirmed, not just inferred from one rate-limited attempt.
+- **`view=drives` (Drive Summary tab) is a good next scrape target despite needing HTML parsing.** Screenshot-confirmed columns: Team, QTR, Start, Poss., Began (i.e. drive start field position, quarter, possessing team, how the drive started — kickoff/punt/turnover/etc.). This would directly fill the drive-level rollup gap this session already flagged as missing (`% Drives Score`, `% Drives 3-and-Out`, `Avg plays/drive` on the Offense/Defense Identity report page) — it just needs a parser built the same way as `parse_pbp_html`, not a JSON shortcut.
+- **Rate-limiting note for future scraping sessions**: `3c2asports.org` soft-blocks with `202`/empty-body responses after a burst of quick requests (distinct from the Cloudflare `403` on `cccaa.prestosports.com`). A ~20s delay between requests was enough to get clean `200`s again in this session — worth keeping in mind as a real, observed rate limit, not just theoretical.
+- Summary of this whole discovery, updated: JSON-backed and easy (team/player season stats, player game logs, team per-game box scores) vs. HTML-only same-difficulty-as-today (play-by-play, drives, participation, starters) — no exceptions found on either side after this second, unblocked round of testing.
+- **Confirmed exhaustively there's no 6th JSON source**: searched every rendering script referenced by every page type found (`common-page-rendering.js`, `team-page-rendering.js`, `players-page-rendering.js`, `player-page-rendering.js`, `team-coach-view-page-rendering.js`) for the `*DataEndp` naming convention the site's own JS uses to pass these URLs around. Found exactly five: `teamDataEndp` (per-team), `playersDataEndp` / `teamsDataEndp` (conference-wide singletons), `playerDataEndp` (per-player game log), `statsDataEndp` (the metadata legend). The "Coach's View" tab on the box-score page doesn't add a new source either — it just re-renders the same `teamData`/`playersData`/`teamsData` already passed to `ps.rendering.team.initialize(...)`.
+
+### Fetch-and-store for the JSON sources (bronze ingestion)
+- Added `lineup_scrape.py`: `build_team_print_url`, `extract_s3_json_urls` (parses the `ps.rendering.team.initialize(...)` call for the `teamData`/`playersData`/`teamsData` URLs — correctly ignores the unresolved `SPORT_CODE` template placeholders rather than treating them as real endpoints), `build_metadata_legend_url`, and `fetch_lineup_json_sources` (orchestrates all four fetches for one team, reusing the existing `scrape.py::fetch()` helper — which, usefully, already retries on `202`/empty-body with exponential backoff, exactly the rate-limit behavior observed and worked around manually earlier this session).
+- New CLI command `scrape_lineup_json --season --team-slug --delay` (default `--team-slug foothill`, default `--delay 20.0`), writing to `raw_lineup_json` and tracked in `pipeline_runs` under a new `stage='lineup_json'`.
+- `players`/`teams` are conference-wide singletons, so fetching them via one team's page (any team) is enough to cover the whole conference — the command doesn't loop over teams for those two.
+- Added `tests/test_lineup_scrape.py` (pure-function tests, no live network: URL construction, S3-URL extraction from a realistic sample script including the missing-`teamsData`-is-`null` case seen on player bio pages). Full suite: 37 tests passing.
+- **Ran the real command end-to-end** against a scratch copy of the live database (`--team-slug foothill --delay 20`, never the real db file directly): all four sources fetched cleanly (`200`s throughout, no rate-limiting at this pace), stored with byte-for-byte matching sizes to what was seen fetching live earlier in this session (`players_json` = 20,714,574 bytes). Re-parsed the stored `players_json` back out of the database and confirmed all 86 Foothill players are present. `pipeline_runs` correctly recorded a `completed` run with the fetched source kinds in `notes`.
+- Not yet built: any silver-layer parsing of `raw_lineup_json` into real tables/views (e.g. `player_season_stats`, `team_box_scores`) — this command only gets the raw JSON stored reliably. Also not yet built: per-player game-log fetching (`playerDataEndp`) — that needs one request per player of interest, which is a bigger/separate scrape than the four singleton-ish sources this command covers, and no specific player list has been scoped yet.
+- **Scope decision: the primary near-term use of this source is the Team Leaders table** (Passing/Rushing/Receiving/Tackles/Sacks), i.e. parsing `players_json` for one team's players and their season `stats`. Team per-game box scores (swap-bug validation), `teamsData` (cross-checking this project's own season views), and per-player game logs are documented and confirmed working, but are secondary/later use cases, not the next build target. The next real implementation step is a `players_json` parser + a `player_season_stats`-style silver table/view scoped to what Team Leaders needs (`qb`/`rb`/`wr`/`d` position groups), not a general-purpose parser for every stat category this source exposes.
+
+### NCAA passer rating added
+- Added `passer_rating` (NCAA college formula — no clamps, unlike the NFL rating): `(8.4*Yds + 330*TD + 100*Comp - 200*Int) / Att`.
+- Team level: added to `v_team_game_offense_current` / `_defense_current` (as `passer_rating` / `opp_passer_rating`), and ranked (with `RANK()`) on the season views `v_team_season_offense_ranked_current` / `_defense_ranked_current`.
+- Player level: new `v_player_game_passing_current` / `v_player_season_passing_current`, grouped on the raw `plays.passer` text field directly — deliberately no player-identity crosswalk join. Documented the reliability posture in `METRICS.md`: solid for one team's own passing stats (typically 1-2 QBs per season, same source parsing the same spelling repeatedly), not a substitute for real identity resolution across games/teams.
+- Validated against live season data: hand-computed formula matched the view's output exactly (Foothill: 268 att / 149 comp / 1657 yds / 16 TD / 7 INT → `122.0`); player split showed two Foothill QBs sharing snaps (James Maxwell 169 att, John Larios 98 att), both individually plausible.
+- Added `test_passer_rating_team_and_player_views` in `tests/test_report_views.py`. Full suite: 33 tests passing.
+
+### Weekly coach report rebuilt on DuckDB (4-page compact format)
+- Replaced the old CSV-based weekly matchup preview (`analysis/*.py` + `analysis/build_preview_docx.py`, the source of `reports/Wk1-Butte.pdf`) with a DuckDB-native pipeline, per user request for a compact (4-page max, mostly tables + 1-2 charts) report and a stable way to keep generating it week to week.
+- Editorial decisions locked in with the user before building:
+  - drop the "Team Leaders" section entirely (depends on unresolved player-name crosswalk work)
+  - replace the old full Early-Down + Third-Down rank tables with one "Success Rate by Down" line chart + a trimmed 6-row bidirectional table
+  - weekly-trends page gets a sensible default metric set (success rate, explosive rate, 3rd-down conversion), but the metric list is a config list in `report_build.py`, not hardcoded per-chart code, so it's a one-line edit to swap later
+- Data architecture decision: compute everything **live via `RANK() OVER (PARTITION BY season ...)` window functions in the view layer**, no new audit/snapshot table. A cross-team percentile rank is a pure, deterministic function of data that's already frozen per the existing `v_current_*_runs` resolution, so it can't drift out of sync with a metric-definition change the way a snapshot could. The actual historical record of "what the coach saw in week N" is the saved `.docx` file in `reports/`, not a database row.
+- New views added to `_refresh_views()` in `db.py`:
+  - `v_play_context_current` extended with `is_early_down` / `is_passing_down`, ported verbatim from `analysis/helpers.py::add_flags()` (`2nd & 8+` or `3rd/4th & 5+` = passing down; `1st/2nd` not passing down = early down). These intentionally overlap with `down = 3`/`down = 4` — a 3rd-and-8 is both `is_passing_down` and third down, matching the old pipeline's non-mutually-exclusive treatment.
+  - `v_schedule_current` — trivial gap-filler mirroring `v_games_current`'s pattern, needed for the page-1 schedule table.
+  - `v_team_game_situation_offense_current` / `_defense_current` and their season rollups `v_team_season_situation_offense_current` / `_defense_current` — one row per `(team, game or season, situation)` via `UNION ALL` over `situation IN ('early_down','passing_down','third_down','fourth_down')`, reusing the same aggregate column shape as the existing non-situational offense/defense views, plus `distance_sum`/`distance_n` (kept as a sum pair, not a pre-averaged `avg_distance`, so season rollups don't average-of-averages).
+  - `v_team_season_offense_ranked_current` / `_defense_ranked_current` and their situational counterparts `v_team_season_situation_offense_ranked_current` / `_defense_ranked_current` — add rate columns and `RANK()` per metric, direction ported 1:1 from `analysis/table_production.py::add_ranks()`'s per-metric higher/lower-better dicts.
+- **Found and fixed a real percentage-denominator bug while validating against the live season data.** Initially computed `pass_pct`/`rush_pct`/`yards_per_play` against the view's raw `play_count`, which also includes non-scrimmage rows (punts, kickoffs, PAT/two-point, drive markers) — this gave Foothill offense `34.4%` pass / `46.6%` rush against the season data, when the old pipeline's number (and the actual correct figure) is `44.5%` / `60.4%`. Root cause: the old pipeline's `load_plays()` pre-filters to `play_type in ('rush','pass')` before any percentage is computed, so its "total" denominator is scrimmage plays only. Fixed by using `pass_att + rush_att` ("scrimmage plays") as the denominator instead of `play_count` — confirmed this now matches the old pipeline's season-aggregate numbers exactly, including the sacks-double-counted-into-both-pass-and-rush convention that pushes the two percentages' sum above 100%.
+- The situational views (early/passing/third/fourth down) do **not** attempt to reproduce the old `table_early_down.py`/`table_third_down.py` numbers exactly — those scripts use an inconsistent per-script sack convention (a sack silently drops out of both the pass and rush numerator while still counting in the denominator) that conflicts with this project's own canonical `is_rush_attempt` definition (includes sacks everywhere else in this schema). Applied the canonical convention uniformly instead; situational percentages come out a few points off from the old pipeline's by design, not by bug. Documented in `METRICS.md`.
+- New report-generation code lives inside `duckdb_pipeline` rather than a separate top-level script — it already owns the whole data layer, and the report is a first-class consumer of it, same posture as `scrape_season_plays`/`refresh_duckdb_views`:
+  - `report_data.py` (new) — pure query/shaping layer, no docx/matplotlib imports, stays unit-testable with the existing lightweight fixture pattern.
+  - `report_build.py` (new) — chart rendering (ported styling from `analysis/plot_charts.py`: font registration with the existing graceful-degrade guard, Foothill palette) + docx assembly (ported table helpers from `analysis/build_preview_docx.py`). Charts stay matplotlib PNGs embedded via `doc.add_picture(...)`, matching the established `reports/build_report.py` precedent.
+  - New CLI command `build_weekly_report` (added `python-docx`/`matplotlib` to `duckdb_pipeline/pyproject.toml`), refuses to overwrite an existing output file.
+- **Found and fixed a real bug in `report_data.py::load_weekly_trends` during end-to-end validation**: the opponent-per-week column was derived from `pc.opponent`, which is always relative to *that row's own offense* — on the rows where the tracked team is on defense, this returned the tracked team's own name instead of the actual opponent (week 8 showed "Foothill" as its own week-8 opponent instead of "Diablo Valley"). Fixed by deriving the opponent directly from `schedule_home`/`schedule_away` relative to the tracked team, independent of which side of the ball that particular row is on.
+- Added `tests/test_report_views.py`: `is_early_down`/`is_passing_down` truth table (including the known third-down/passing-down overlap case), situation-rollup row-count sanity, and rank-direction sanity (most rush yards → offensive rank 1; most yards allowed → defensive rank last). Full suite: 32 tests passing.
+- End-to-end validated by generating the actual Week 1 Foothill-vs-Butte report from live data (scratch copy, never the real db file directly, until the final regenerate): confirmed 4 pages (3 page breaks), exactly 2 embedded chart images, and numbers matching the old pipeline's golden output where expected to match, diverging only where already documented as intentional (success-rate threshold change, situational sack-convention change).
+
+### Score margin added to v_play_context_current
+- Compared a hand-drafted metrics/filters checklist against `METRICS.md` and confirmed nearly every listed metric already had an exact numerator/denominator definition staged as `derived_next`. The one genuinely open filter was `score_margin`, previously `future_modeling` because no score state existed anywhere in the schema.
+- Decision: derive score state directly from `plays`, no box-score dependency required.
+- Added `score_margin` and `score_margin_bucket` to `v_play_context_current`, computed via two new CTEs:
+  - `scoring_points`: per-play home/away points, attributing 6 to a non-conversion `is_td`, 3 to a made `field_goal`, 1 to a made `pat`, 2 to a made `two_point`, keyed to whichever of `schedule_home`/`schedule_away` matches that play's `offense`
+  - `game_score_state`: a running pre-play cumulative sum per game ordered by `play_id`, using `ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING` so the scoring play itself still shows the score *entering* it, matching the pre-snap semantics `down`/`distance`/`quarter` already use in this view
+- `score_margin` is `offense_score - defense_score` at that pre-play state; `score_margin_bucket` buckets it into `blowout_lead` / `two_score_lead` / `one_score_lead` / `tied` / `one_score_deficit` / `two_score_deficit` / `blowout_deficit`.
+- Confirmed known, permanent gaps rather than silently approximating them:
+  - safeties are not parsed as an event anywhere in `parse.py`, so a scored safety's 2 points never enter `score_margin`
+  - defensive/special-teams touchdowns (pick-six, fumble/blocked-kick return TD) only clear the offensive `is_td` flag (per the 2026-06-30 defensive fumble-return TD fix) — they were never turned into a scoring event for the defense, so those 6 points are also invisible
+  - both gaps leave `score_margin` permanently short for the rest of that game, not just temporarily desynced, until parser support for these play types is added
+- Updated `METRICS.md`: `score_margin` / `score_margin_bucket` moved from `future_modeling` to `derived_next`, with the two gaps documented inline.
+- Extended `test_current_run_views_and_current_offense_rollups` in `test_db.py` to assert the running score state across the existing 3-play `g-new` fixture (TD on play 1, so play 1 itself reads `0-0` / `tied`; plays 2 and 3 read `6-0` / `one_score_lead`). Full suite (28 tests) passes.
+
+### Safety and defensive-touchdown flags close the score_margin gaps
+- Followed up on the two gaps logged above by adding `plays.is_safety` and `plays.is_defensive_td`.
+- `is_safety`: a plain `\bsafety\b` regex against play text in `parse.py`. Verified real and consistent against the live `raw_text` corpus (383 historical matches) before writing it.
+- `is_defensive_td`: set at parse time only for the interception-return (pick-six) case (`is_interception AND "touchdown" in text`), since that's unambiguous — no team-name matching needed, the interceptor is definitionally the defense.
+- While scoping the fumble-recovery-TD half of `is_defensive_td`, found that reusing the field-position crosswalk (`field_position_crosswalk`, built from human-reviewed field-position work) resolves the exact same raw team abbreviations that the existing parse-time suppression (`_team_matches`/`_team_prefix_matches` in `parse.py`, from the 2026-06-30 defensive fumble-return TD fix) fails to match — e.g. `MSJC-FB` for `Mt. San Jacinto`, which isn't a textual prefix/substring of the canonical name at all.
+- Digging further surfaced a second, more foundational bug live in the current blessed run: `RE_FUMBLE`'s capture group for the recovering team's abbreviation is polluted by the recovering player's own name, because the whole regex is compiled with `re.IGNORECASE`, which defeats the intended all-caps-vs-mixed-case boundary between the team-abbreviation group and the player-name group. Confirmed directly against `data/foothill.duckdb`: `fumble_recovered_by` stores values like `"FULLERTO Ethan"` and `"SANTA MO Chistopher"` instead of just `"FULLERTO"` / `"SANTA MO"`, breaking simple team-name matching even for straightforward, correctly-abbreviated cases (not just genuinely different abbreviations like `MSJC-FB`).
+- Fix: resolve the fumble-recovery case at the view layer (`v_play_context_current` in `db.py`, `scoring_points`/`scoring_totals` CTEs) by joining `field_position_crosswalk` on `(season, game_id)` with `fumble_recovered_by LIKE prefix || '%'` — a prefix match, not exact equality, which tolerates the name-pollution bug without needing to touch the regex or reparse anything. Picks the longest matching prefix via a scalar subquery to avoid any join fan-out. Falls back to the stored (occasionally wrong) `is_td` when a game has no crosswalk entry yet.
+- Validated against a scratch copy of the live `data/foothill.duckdb` (never the real file) via `init_db()`: all 4 known-bad rows in the current blessed run now correctly resolve as defensive touchdowns instead of incorrectly-credited offensive ones —
+  - `20251018_k2dy` (Bakersfield/Fullerton), `20251101_1js3` (Chabot/Feather River via the `FRC` abbreviation), `20251101_ca8g` (San Diego Mesa/Mt. San Jacinto), `20251108_y7hi` (West LA/Santa Monica)
+  - season-wide counts after backfill: `is_safety = 43`, `is_defensive_td = 127` (sane magnitudes for a season of ~55,850 plays)
+- Schema: both columns added to `CREATE TABLE plays`, migrated via `_ensure_column`, and backfilled via a new idempotent `_backfill_plays_safety_and_defensive_td` (mirrors `_backfill_pipeline_run_stages`) — both flags are fully recoverable from already-stored `raw_text`/`is_interception`, so existing rows get them without a `rebuild_plays_from_raw` reparse.
+- `v_play_context_current` now exposes a unified, fully-resolved `is_defensive_td` (parse-time pick-six OR view-level crosswalk-resolved fumble-recovery) and a pass-through `is_safety`, for reporting as well as scoring. Same bronze/silver-vs-gold naming pattern already used for `field_position` (raw token vs crosswalk-resolved token) — `plays.is_defensive_td` (pick-six only) vs `v_play_context_current.is_defensive_td` (complete).
+- Remaining known gap, deliberately out of scope here: blocked-kick-return touchdowns (blocked punt/FG returned for a score) aren't covered by either resolution path. Confirmed real (~5 instances in the season's raw text) but rare enough not to hold up the rest of this fix.
+- Added `test_score_margin_credits_safety_and_defensive_touchdowns` in `test_db.py`: a small synthetic game covering a non-scoring play, a safety, a pick-six, and a fumble-recovery TD with `is_td` deliberately stored as the (buggy) `True` to prove the crosswalk suppression prevents double-counting. Full suite (29 tests) passes.
+
 ## 2026-07-03
+
+### Explicit pipeline_runs stage column
+- Added `pipeline_runs.stage` (`'structure'`, `'plays'`, `'field_position'`, and later `'lineups'`) as an explicit column instead of inferring the run kind by sniffing `games_count IS NOT NULL` or JSON keys inside `notes` (`notes LIKE '%"plays_count"%'`, etc.).
+- Motivation:
+  - `pipeline_runs` is one shared table across every stage, and the old approach meant each new stage needed its own bespoke marker to distinguish itself from the others
+  - that gets uglier as more stages (`lineups`, future stages) get added as first-class commands
+  - a real `stage` column makes every `v_current_<x>_runs` view and every run-resolver function collapse to the same `WHERE stage = ? AND status = 'completed'` shape
+- Decision: overwrite-in-place was rejected for run history. Keep `pipeline_runs` and all base tables (`standings`, `schedule`, `games`, `plays`) append-only and `run_id`-keyed. The entire 2026-06-30 reparse debugging session (sack accounting, quarter-start possession reset, ghost-drive residue, defensive fumble-return TD) depended on diffing an old run against a new one for the same `game_id` — overwriting would have destroyed that capability. `stage` only changes how a run's *kind* is identified, not whether runs persist.
+- Migration:
+  - `stage TEXT` added to the `pipeline_runs` schema for new databases
+  - `_ensure_column` adds it to existing databases (same pattern already used for `plays.is_pass_attempt` / `is_rush_attempt` / `is_conversion`)
+  - a one-time backfill (`_backfill_pipeline_run_stages` in `db.py`) assigns `stage` to any pre-existing row where it's still `NULL`, using the exact same signals the views used to sniff stage from before (`games_count IS NOT NULL` -> `structure`; `notes` containing `"plays_count"` -> `plays`; `notes` containing `"field_position_rows"` -> `field_position`)
+  - the backfill is idempotent (`WHERE stage IS NULL`) and runs every `init_db()` call, so it applies automatically the next time any CLI command or `refresh_duckdb_views` touches an existing `.duckdb` file
+- Verified against the live `data/foothill.duckdb`: after running `refresh_duckdb_views`, all `completed` runs backfilled to the correct stage (`structure=2`, `plays=12`, `field_position=2`), and `v_current_runs` still resolved to the same frozen checkpoint runs as before (`4b573736...` structure, `63fa3f95...` plays). `failed`/`running` rows correctly stayed `stage = NULL` since a run that never completed was never distinguishable as one kind or another anyway.
+- Every `_insert_running_run` call site now passes `stage` explicitly (`main_structure` -> `"structure"`, `main_plays` / `main_rebuild_plays_from_raw` -> `"plays"`, `main_apply_field_positions` -> `"field_position"`, new `main_rebuild_structure_from_raw` -> `"structure"`), so a future stage that forgets to set it fails loudly (missing required arg) rather than silently landing with `stage = NULL` and never showing up as "current."
+
+### Structure rebuild-from-raw added
+- Added `main_rebuild_structure_from_raw` (console script `rebuild_structure_from_raw`), symmetric to the existing `rebuild_plays_from_raw`.
+- Re-parses stored `raw_standings_html` + `raw_schedule_html` for a given structure run into a fresh `standings` / `schedule` / `games` run, without re-fetching from the network.
+- Closes the asymmetry where a plays parser bug could always be fixed by re-parsing stored raw HTML, but a standings/schedule parser bug would have forced a full re-scrape.
+- `--source-structure-run-id` defaults to the latest completed structure run for the season (via `pipeline_runs.stage = 'structure'`) when omitted.
+- Added `test_rebuild_structure_from_raw_reparses_without_rescraping` in `test_cli.py` covering the full loop: seed `raw_standings_html`/`raw_schedule_html` fixtures, run the command, confirm `v_standings_current` and `v_games_current` reflect the reparsed run.
+
+### Pipeline dependency breadcrumb
+- Locked the current scrape dependency model in words before changing the CLI surface.
+- Current working chain remains:
+  - `standings scrape -> schedules scrape -> build games -> plays scrape`
+- Important clarification:
+  - `build_games` is not a fetch step
+  - it is the canonicalization step that converts team-sided `schedule` rows into one canonical `games` row per `game_id`
+- Current dependency interpretation:
+  - `plays` depends on `games`
+  - `games` depends on `schedule`
+  - `schedule` currently depends on `standings` because standings is how team schedule URLs are discovered
+- Decision for now:
+  - leave the working end-to-end path untouched
+  - keep `scrape_season_structure` as the convenience wrapper
+  - later add smaller first-class commands around the same logic:
+    - `scrape_standings`
+    - `scrape_schedules`
+    - `build_games`
+    - separate `scrape_lineups`
+- Architectural intent:
+  - preserve the stable current pipeline
+  - improve auditability and selective reruns by exposing smaller scrape/derive units over time
+
+### Derived standings layer added
+- Added `v_standings_current` as the first analyst-facing standings surface on top of the append-only base `standings` table.
+- Decision:
+  - keep `standings` unchanged as scrape truth with source-facing fields like `team_id` and `schedule_url`
+  - expose a wide current-run reporting layer instead of stuffing derived report context into the base table
+- `v_standings_current` now provides:
+  - `season`
+  - `run_id`
+  - `conference`
+  - `team_name`
+  - `team_id`
+  - `schedule_url`
+  - `games`
+  - `wins`
+  - `losses`
+  - `ties`
+  - `win_pct`
+  - `conference_games`
+  - `conference_wins`
+  - `conference_losses`
+  - `conference_ties`
+  - `conference_win_pct`
+- Numeric-looking standings fields are cast in the view so report queries do not have to keep re-casting text columns.
+- This keeps the pipeline split clean:
+  - base scrape tables for audit and source fidelity
+  - derived `v_*_current` views for operator/report use
+- Added a small helper command for this:
+  - `refresh_duckdb_views --db-path <path>`
+- Intent:
+  - make it explicit and low-friction to stamp the latest view definitions into the physical `.duckdb` file
+  - support a quick "refresh then validate" workflow before committing pipeline changes
 
 ### Session checkpoint
 - Opened a new design session around the post-validation analytics layer.
@@ -37,6 +286,44 @@
 - The intended next implementation target remains:
   - derived play-context and team report views
   - then a first automated `team_report`
+
+### Derived play-context and defense views added
+- Added the first analytics-oriented derived view layer on top of `v_plays_current`.
+- New per-play context view:
+  - `v_play_context_current`
+- New defense rollup views:
+  - `v_team_game_defense_current`
+  - `v_team_season_defense_current`
+- Extended offense rollups:
+  - `v_team_game_offense_current`
+  - `v_team_season_offense_current`
+  - now include:
+    - opponent
+    - home/away
+    - week
+    - success counts
+    - explosive counts
+    - stuffed-run counts
+- `v_play_context_current` now derives:
+  - `week`
+  - `distance_bucket`
+  - `yardline_100`
+  - `field_zone`
+  - `is_success`
+  - `explosive_rush`
+  - `explosive_pass`
+  - `is_explosive`
+  - `is_stuffed`
+- Current first-pass assumptions:
+  - `week` is offense-team game order within season on the per-play context row
+  - `field_zone` buckets are:
+    - `backed_up`
+    - `own_territory`
+    - `midfield`
+    - `fringe`
+    - `red_zone`
+- Validation:
+  - full `duckdb_pipeline` test suite passed after the new view layer was added
 
 ### Current-run helper views added
 - Added a small operator-facing DuckDB view layer so routine analysis no longer has to hardcode `run_id` values.
