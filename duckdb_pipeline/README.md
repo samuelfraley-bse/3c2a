@@ -172,6 +172,8 @@ uv run --active streamlit run src/duckdb_pipeline/dashboard_app.py
 
 Opens `http://localhost:8501` in your browser. The database path is a sidebar field (defaults to `data/foothill.duckdb`) — the app only ever opens a **read-only** connection, so there's no risk of it mutating data. `dashboard_data.py` is the pure query layer (no Streamlit import); `dashboard_app.py` is presentation-only, same split as `report_data.py`/`report_build.py`.
 
+The app has two top-level tabs: **Team Stats** (the filterable Offense/Defense × Season/Game × Passing/Rushing grid described above) and **Report Prep** — pick a team + opponent + season and get every raw number `reports/Wk1-Butte-template.pdf` needs (Season Recap, Quick Hitters, Team Leaders, Match-Up, Identity), laid out as plain read/copy tables, not another sortable grid. Report Prep reuses `report_data.py`'s existing query functions directly (the same ones `report_build.py` uses for the automated docx report) plus three new ones added for this tab: `load_quick_hitters`, `load_team_leaders`, `load_identity`.
+
 To re-parse stored raw standings/schedule HTML into a fresh `standings`/`schedule`/`games` run, without re-scraping:
 
 ```powershell
@@ -412,10 +414,9 @@ The prompt intentionally resets to `Queue 1` after each resolution, because it a
 
 The current field-position review flow is intentionally optimized for week-by-week in-season ingest:
 
-1. scrape the newest games
-2. run `prepare_field_positions --review`
-3. resolve the small unresolved queue
-4. apply the derived field-position layer
+1. scrape the newest games (or `rebuild_plays_from_raw` to reparse)
+2. **field position now auto-refreshes** (see below) -- usually nothing left to do
+3. only if the auto-refresh logs unresolved games: run `prepare_field_positions --review`, resolve the small queue, then `apply_field_positions`
 
 That is expected to stay stable because the manual review surface per week should remain small.
 
@@ -426,6 +427,13 @@ Historical backfill is a little different. The same review flow works today, and
 - partial automation with manual confirmation
 
 For now, treat historical mode as manual-first and flag larger-scale automation as a future improvement rather than a requirement for the current pipeline.
+
+## Field position auto-refresh (and staleness visibility)
+
+`play_field_positions` is keyed to a specific `plays` run_id -- every time `scrape_season_plays`/`rebuild_plays_from_raw` produces a *new* plays run, the field-position data built for the *previous* run no longer matches, and `yardline_100` goes `NULL` until it's refreshed. This used to be entirely silent. Two things fix that:
+
+1. **Auto-refresh**: both `scrape_season_plays` and `rebuild_plays_from_raw` now automatically re-run the field-position pipeline against the new plays run afterward, reusing whatever team-prefix crosswalk memory already exists from prior weeks. If that fully resolves every game (the common case in practice -- confirmed to auto-resolve 100% of games, twice in a row, this season), it applies immediately and there's nothing to do. If a genuinely new/ambiguous team abbreviation shows up, it does **not** guess -- it logs exactly which games need manual review (`prepare_field_positions --review` then `apply_field_positions`), same as before. Pass `--skip-field-position-refresh` to either command to opt out and go fully manual.
+2. **Visibility**: `SELECT season, field_position_is_stale FROM v_current_runs` tells you, for any season, whether `play_field_positions` currently matches the latest `plays` run. `true` means it's out of date (either the auto-refresh found unresolved games, or `--skip-field-position-refresh` was used) and `yardline_100`-dependent numbers (field position, drive rollups, etc.) should not be trusted until it's `false` again.
 
 ## Test
 

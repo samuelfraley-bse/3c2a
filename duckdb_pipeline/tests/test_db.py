@@ -702,7 +702,7 @@ class DbTests(unittest.TestCase):
             ).fetchone()
             self.assertEqual(
                 play_context_row,
-                (1, "long", 25, "own_territory", True, False, False, False, False),
+                (1, "long", 25, "opponent_territory", True, False, False, False, False),
             )
 
             score_state_rows = conn.execute(
@@ -1327,6 +1327,219 @@ class DbTests(unittest.TestCase):
                     ("gs3", 2, 0, 0),
                 ],
             )
+            conn.close()
+
+    def test_fumble_recovery_defensive_td_excluded_from_pass_td_and_sack_rate(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = f"{tmpdir}/test.duckdb"
+            conn = connect(db_path)
+            init_db(conn)
+            insert_rows(
+                conn,
+                "pipeline_runs",
+                [
+                    {
+                        "run_id": "plays-fix",
+                        "season": "2025-26",
+                        "started_at": "2026-01-01 00:00:00",
+                        "finished_at": "2026-01-01 00:01:00",
+                        "status": "completed",
+                        "stage": "plays",
+                    },
+                ],
+            )
+
+            def base_play(play_id: int, **overrides: object) -> dict[str, object]:
+                row: dict[str, object] = {
+                    "run_id": "plays-fix",
+                    "season": "2025-26",
+                    "game_id": "g-fix",
+                    "home_team": "Home",
+                    "away_team": "Away",
+                    "schedule_home": "Home",
+                    "schedule_away": "Away",
+                    "play_id": play_id,
+                    "quarter": 1,
+                    "down": 1,
+                    "distance": 10,
+                    "offense": "Away",
+                    "defense": "Home",
+                    "play_type": "pass",
+                    "yards_gained": 0,
+                    "is_dropback": True,
+                    "is_pass_attempt": True,
+                    "is_rush_attempt": False,
+                    "completion": False,
+                    "is_interception": False,
+                    "is_td": False,
+                    "is_conversion": False,
+                    "is_sack": False,
+                    "is_fumble": False,
+                    "fumble_recovered_by": None,
+                    "is_safety": False,
+                    "is_defensive_td": False,
+                    "is_penalty": False,
+                    "fg_result": None,
+                    "raw_text": "placeholder",
+                }
+                row.update(overrides)
+                return row
+
+            insert_rows(
+                conn,
+                "plays",
+                [
+                    # 1: ordinary completion, not a score.
+                    base_play(1, completion=True, yards_gained=20),
+                    # 2: a sack -- play_type stays 'pass' but flips to a rush
+                    # attempt per this project's convention (README.md).
+                    base_play(
+                        2, is_pass_attempt=False, is_rush_attempt=True, is_sack=True, yards_gained=-7,
+                    ),
+                    # 3: Away fumbles on a pass play; Home's defense recovers
+                    # and returns it for a score. Raw is_td=True is
+                    # misleading (simulating the real RE_FUMBLE pollution
+                    # bug) -- the crosswalk below resolves is_defensive_td
+                    # correctly. This should NOT count as Away's pass_td, and
+                    # should NOT count as Home allowing an opponent pass TD.
+                    base_play(
+                        3,
+                        yards_gained=-3,
+                        is_fumble=True,
+                        fumble_recovered_by="HOMEPRE John Smith",
+                        is_td=True,
+                        raw_text=(
+                            "Away QB pass complete, fumble recovered by "
+                            "HOMEPRE John Smith, return 30 yards, TOUCHDOWN, clock 05:00."
+                        ),
+                    ),
+                ],
+            )
+            insert_rows(
+                conn,
+                "field_position_crosswalk",
+                [
+                    {
+                        "season": "2025-26",
+                        "source_plays_run_id": "plays-fix",
+                        "game_id": "g-fix",
+                        "prefix": "HOMEPRE",
+                        "canonical_team": "Home",
+                        "resolution_method": "manual",
+                        "note": "test fixture",
+                        "resolved_at": "2026-01-01 00:00:00",
+                    },
+                ],
+            )
+
+            offense_row = conn.execute(
+                """
+                SELECT pass_att, pass_td, sacks, dropbacks, sack_rate, sack_rate_rank
+                FROM v_team_season_offense_ranked_current
+                WHERE season = '2025-26' AND team_name = 'Away'
+                """
+            ).fetchone()
+            # pass_td must be 0 -- NOT 1 -- proving play 3's misleading
+            # is_td=True did not leak into Away's own passing-TD count.
+            self.assertEqual(offense_row, (2, 0, 1, 3, 33.3, 1))
+
+            defense_row = conn.execute(
+                """
+                SELECT opp_pass_att, opp_pass_td, sacks_forced, opp_dropbacks, opp_sack_rate, opp_sack_rate_rank
+                FROM v_team_season_defense_ranked_current
+                WHERE season = '2025-26' AND team_name = 'Home'
+                """
+            ).fetchone()
+            # opp_pass_td must be 0 -- Home's own defensive score should not
+            # be recorded as a touchdown Home's defense "allowed."
+            self.assertEqual(defense_row, (2, 0, 1, 3, 33.3, 1))
+            conn.close()
+
+    def test_field_position_is_stale_flips_when_plays_run_moves_on(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = f"{tmpdir}/test.duckdb"
+            conn = connect(db_path)
+            init_db(conn)
+            insert_rows(
+                conn,
+                "pipeline_runs",
+                [
+                    {
+                        "run_id": "plays-1",
+                        "season": "2025-26",
+                        "started_at": "2026-01-01 00:00:00",
+                        "finished_at": "2026-01-01 00:01:00",
+                        "status": "completed",
+                        "stage": "plays",
+                        "notes": None,
+                    },
+                    {
+                        "run_id": "fieldpos-1",
+                        "season": "2025-26",
+                        "started_at": "2026-01-01 00:02:00",
+                        "finished_at": "2026-01-01 00:03:00",
+                        "status": "completed",
+                        "stage": "field_position",
+                        "notes": '{"source_plays_run_id": "plays-1", "field_position_rows": 5, "resolved_count": 5, "unresolved_count": 0}',
+                    },
+                ],
+            )
+
+            # Only plays-1 exists so far, and field_position was built from
+            # it -- not stale.
+            row = conn.execute(
+                "SELECT plays_run_id, field_position_source_plays_run_id, field_position_is_stale FROM v_current_runs WHERE season = '2025-26'"
+            ).fetchone()
+            self.assertEqual(row, ("plays-1", "plays-1", False))
+
+            # A new plays run lands (e.g. a reparse) with no matching
+            # field_position run yet -- now stale, even though a
+            # field_position run still exists (it's just built from the
+            # OLD plays run).
+            insert_rows(
+                conn,
+                "pipeline_runs",
+                [
+                    {
+                        "run_id": "plays-2",
+                        "season": "2025-26",
+                        "started_at": "2026-01-02 00:00:00",
+                        "finished_at": "2026-01-02 00:01:00",
+                        "status": "completed",
+                        "stage": "plays",
+                    },
+                ],
+            )
+            row = conn.execute(
+                "SELECT plays_run_id, field_position_source_plays_run_id, field_position_is_stale FROM v_current_runs WHERE season = '2025-26'"
+            ).fetchone()
+            self.assertEqual(row, ("plays-2", "plays-1", True))
+
+            conn.close()
+
+    def test_field_position_is_stale_true_when_no_field_position_run_exists(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = f"{tmpdir}/test.duckdb"
+            conn = connect(db_path)
+            init_db(conn)
+            insert_rows(
+                conn,
+                "pipeline_runs",
+                [
+                    {
+                        "run_id": "plays-only",
+                        "season": "2025-26",
+                        "started_at": "2026-01-01 00:00:00",
+                        "finished_at": "2026-01-01 00:01:00",
+                        "status": "completed",
+                        "stage": "plays",
+                    },
+                ],
+            )
+            row = conn.execute(
+                "SELECT field_position_source_plays_run_id, field_position_is_stale FROM v_current_runs WHERE season = '2025-26'"
+            ).fetchone()
+            self.assertEqual(row, (None, True))
             conn.close()
 
 

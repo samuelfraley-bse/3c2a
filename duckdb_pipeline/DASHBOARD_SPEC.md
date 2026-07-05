@@ -56,7 +56,11 @@ All of these already exist as columns on `v_play_context_current` — no new sch
 
 Same formulas already established in `v_team_season_offense_ranked_current`/`_defense_ranked_current` (`METRICS.md` is the canonical source for these — never redefine them here), computed as a filtered aggregation instead of a static full-season one:
 
-`team_name, games, pass_att, pass_comp, comp_pct, pass_yds, pass_ypa, pass_td, pass_int, dropbacks, sacks, pass_success_rate, pass_explosive_rate, pass_comp_10_plus, pass_comp_20_plus, passer_rating`
+`team_name, games, pass_att, pass_comp, comp_pct, pass_yds, pass_ypa, pass_td, pass_int, dropbacks, sacks, sack_rate, pass_success_rate, pass_explosive_rate, pass_comp_10_plus, pass_comp_20_plus, passer_rating`
+
+`sack_rate` = `sacks / dropbacks` (not `sacks / pass_att` — `dropbacks` already includes sacks per this project's own `is_dropback` convention). Lower is better on Offense tabs, higher is better on Defense tabs (forcing more sacks).
+
+`pass_td`/`rush_td` exclude any play where `is_defensive_td = true` — a fumble recovered and returned for a score by the defense must not be miscredited as the offense's own touchdown (this was a real bug, found and fixed; see `LOGS.md` and `METRICS.md`'s `pass_td` entry).
 
 ## Rushing tab columns (Offense and Defense)
 

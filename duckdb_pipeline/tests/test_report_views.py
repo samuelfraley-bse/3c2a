@@ -1,6 +1,7 @@
 import tempfile
 import unittest
 
+from duckdb_pipeline import report_data as rd
 from duckdb_pipeline.db import connect, init_db, insert_rows
 
 
@@ -276,6 +277,174 @@ class ReportViewsTests(unittest.TestCase):
             self.assertEqual(player_rows["QB1"], 150.7)
             # QB2: (8.4*5 + 330*1 + 100*1 - 0) / 1 = 472.0
             self.assertEqual(player_rows["QB2"], 472.0)
+
+            conn.close()
+
+    def test_load_quick_hitters_ppg_and_success_rate(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            conn = connect(f"{tmpdir}/test.duckdb")
+            init_db(conn)
+            self._seed_pipeline_run(conn)
+            insert_rows(
+                conn,
+                "plays",
+                [
+                    # TeamA offense: 1 successful rush, 1 scoring rush (TD),
+                    # 1 successful/explosive completed pass.
+                    _base_play(1, down=1, distance=10, yards_gained=6),
+                    _base_play(2, down=1, distance=10, yards_gained=0, is_td=True),
+                    _base_play(
+                        3, play_type="pass", is_pass_attempt=True, is_rush_attempt=False,
+                        completion=True, down=1, distance=10, yards_gained=20,
+                    ),
+                    # TeamB offense (same game): one unsuccessful rush, no score.
+                    _base_play(4, offense="TeamB", defense="TeamA", down=1, distance=10, yards_gained=1),
+                ],
+            )
+
+            quick_hitters = rd.load_quick_hitters(conn, "2025-26", "TeamA")
+            offense_by_label = {row["label"]: row for row in quick_hitters["offense"]}
+            # TeamA scored 6 (the TD), TeamB scored 0 -- TeamA's offense
+            # should lead the 2-team pool on PPG.
+            self.assertEqual(offense_by_label["PPG"]["value"], 6.0)
+            self.assertEqual(offense_by_label["PPG"]["rank"], 1)
+            # 2 of TeamA's 3 scrimmage plays were successful (the two rushes:
+            # first counts, TD rush doesn't meet the 1st-down threshold; the
+            # pass does) -- exact value isn't the point here, just that the
+            # combined (not pass-only/rush-only) success_rate flows through.
+            self.assertIn("Success Rate", offense_by_label)
+            self.assertIsNotNone(offense_by_label["Success Rate"]["value"])
+            # No third-down plays exist in this fixture -- must degrade to
+            # None gracefully, not raise.
+            self.assertIsNone(offense_by_label["3rd Down Conversion"]["value"])
+
+            defense_by_label = {row["label"]: row for row in quick_hitters["defense"]}
+            self.assertEqual(defense_by_label["PPG"]["value"], 0.0)
+
+            conn.close()
+
+    def test_load_identity_rush_pass_split_and_conference_average(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            conn = connect(f"{tmpdir}/test.duckdb")
+            init_db(conn)
+            self._seed_pipeline_run(conn)
+            insert_rows(
+                conn,
+                "plays",
+                [
+                    # TeamA offense: 3 rushes, 1 pass (75% run / 25% pass).
+                    _base_play(1, down=1, distance=10, yards_gained=4),
+                    _base_play(2, down=2, distance=6, yards_gained=3),
+                    _base_play(3, down=1, distance=10, yards_gained=5),
+                    _base_play(
+                        4, play_type="pass", is_dropback=True, is_pass_attempt=True, is_rush_attempt=False,
+                        completion=True, down=1, distance=10, yards_gained=12,
+                    ),
+                    # TeamB offense (same game): 1 rush only, feeds the
+                    # conference-average denominator alongside TeamA.
+                    _base_play(5, offense="TeamB", defense="TeamA", down=1, distance=10, yards_gained=8),
+                ],
+            )
+
+            identity = rd.load_identity(conn, "2025-26", "TeamA")
+            offense = identity["offense"]
+            self.assertEqual(offense["rush_pct"], 75.0)
+            self.assertEqual(offense["pass_pct"], 25.0)
+            # TeamA's own rush_ypa: (4+3+5)/3 = 4.0
+            self.assertEqual(offense["rush_ypa"], 4.0)
+            # Conference average rush_ypa across TeamA (4.0) and TeamB (8.0) = 6.0
+            self.assertEqual(offense["conference_avg_rush_ypa"], 6.0)
+            # Structure sanity: rushing/passing/field_position/tempo lists
+            # exist and situation_run_rate degrades gracefully with no
+            # early/third-down plays in this fixture.
+            self.assertTrue(len(offense["rushing"]) > 0)
+            self.assertTrue(len(offense["passing"]) > 0)
+            self.assertIsNone(offense["situation_run_rate"]["third_down_success_rate"])
+
+            conn.close()
+
+    def test_load_team_leaders_orders_and_caps_per_category(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            conn = connect(f"{tmpdir}/test.duckdb")
+            init_db(conn)
+            insert_rows(
+                conn,
+                "pipeline_runs",
+                [
+                    {
+                        "run_id": "lineup-report",
+                        "season": "2025-26",
+                        "started_at": "2026-01-01 00:00:00",
+                        "finished_at": "2026-01-01 00:01:00",
+                        "status": "completed",
+                        "stage": "lineup_stats",
+                    },
+                ],
+            )
+
+            def player(full_name: str, position_group: str, **overrides: object) -> dict[str, object]:
+                row: dict[str, object] = {
+                    "run_id": "lineup-report",
+                    "season": "2025-26",
+                    "player_id": full_name,
+                    "page_name": full_name,
+                    "full_name": full_name,
+                    "first_name": full_name,
+                    "last_name": full_name,
+                    "team": "TeamA",
+                    "team_id": "t1",
+                    "position": position_group.upper(),
+                    "position_group": position_group,
+                    "uniform": "1",
+                    "year": "So.",
+                    "active": True,
+                    "games_played": 10.0,
+                    "pass_att": None, "pass_comp": None, "pass_pct": None, "pass_yds": None,
+                    "pass_ypg": None, "pass_ypa": None, "pass_td": None, "pass_int": None,
+                    "pass_lg": None, "pass_rating": None,
+                    "rush_att": None, "rush_yds": None, "rush_ypg": None, "rush_ypc": None,
+                    "rush_td": None, "rush_lg": None, "fumbles": None, "fumbles_lost": None,
+                    "rec": None, "rec_ypg": None, "rec_yds": None, "rec_ypc": None,
+                    "rec_td": None, "rec_lg": None,
+                    "tackles_solo": None, "tackles_ast": None, "tackles_total": None, "tackles_pg": None,
+                    "sacks": None, "sack_yds": None, "tfl": None, "tfl_yds": None,
+                    "forced_fumbles": None, "fumble_rec": None, "fumble_rec_yds": None,
+                    "interceptions": None, "int_yds": None, "pass_breakups": None, "blocked_kicks": None,
+                }
+                row.update(overrides)
+                return row
+
+            insert_rows(
+                conn,
+                "player_lineup_stats",
+                [
+                    # 3 QBs -- only the top 2 by pass_yds should come back.
+                    player("QB Best", "qb", pass_yds=2000.0),
+                    player("QB Middle", "qb", pass_yds=1000.0),
+                    player("QB Worst", "qb", pass_yds=100.0),
+                    # 4 WRs -- only the top 3 by rec_yds should come back.
+                    player("WR One", "wr", rec_yds=900.0),
+                    player("WR Two", "wr", rec_yds=800.0),
+                    player("WR Three", "wr", rec_yds=700.0),
+                    player("WR Four", "wr", rec_yds=100.0),
+                    # Defensive players: top 2 by tackles_total AND top 2 by
+                    # sacks are independent selections from the same pool.
+                    player("D High Tackles", "d", tackles_total=90.0, sacks=1.0),
+                    player("D Mid Tackles", "d", tackles_total=50.0, sacks=2.0),
+                    player("D High Sacks", "d", tackles_total=10.0, sacks=8.0),
+                ],
+            )
+
+            leaders = rd.load_team_leaders(conn, "2025-26", "TeamA")
+            self.assertEqual([p["full_name"] for p in leaders["passing"]], ["QB Best", "QB Middle"])
+            self.assertEqual(
+                [p["full_name"] for p in leaders["receiving"]], ["WR One", "WR Two", "WR Three"],
+            )
+            self.assertEqual(
+                [p["full_name"] for p in leaders["tackles"]], ["D High Tackles", "D Mid Tackles"],
+            )
+            self.assertEqual([p["full_name"] for p in leaders["sacks"]], ["D High Sacks", "D Mid Tackles"])
+            self.assertEqual(leaders["rushing"], [])
 
             conn.close()
 

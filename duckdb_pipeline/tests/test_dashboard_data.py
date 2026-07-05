@@ -253,5 +253,126 @@ class DashboardDataTests(unittest.TestCase):
         self.assertEqual(team_a["rush_att"], team_a_all["rush_att"])
 
 
+@unittest.skipUnless(importlib.util.find_spec("duckdb"), "duckdb not installed")
+class FumbleRecoveryDefensiveTdTests(unittest.TestCase):
+    """Same scenario as test_db.py's
+    test_fumble_recovery_defensive_td_excluded_from_pass_td_and_sack_rate --
+    dashboard_data.py re-expresses pass_td/sack_rate independently (it can't
+    just query the pre-aggregated views, since filters apply before
+    aggregation), so it needs its own regression coverage for the same
+    is_defensive_td guard.
+    """
+
+    def setUp(self) -> None:
+        self._tmpdir = tempfile.TemporaryDirectory()
+        db_path = f"{self._tmpdir.name}/test.duckdb"
+        self.conn = connect(db_path)
+        init_db(self.conn)
+        insert_rows(
+            self.conn,
+            "pipeline_runs",
+            [
+                {
+                    "run_id": "plays-fix",
+                    "season": "2025-26",
+                    "started_at": "2026-01-01 00:00:00",
+                    "finished_at": "2026-01-01 00:01:00",
+                    "status": "completed",
+                    "stage": "plays",
+                },
+            ],
+        )
+
+        def base_play(play_id: int, **overrides: object) -> dict[str, object]:
+            row: dict[str, object] = {
+                "run_id": "plays-fix",
+                "season": "2025-26",
+                "game_id": "g-fix",
+                "home_team": "Home",
+                "away_team": "Away",
+                "schedule_home": "Home",
+                "schedule_away": "Away",
+                "play_id": play_id,
+                "quarter": 1,
+                "down": 1,
+                "distance": 10,
+                "offense": "Away",
+                "defense": "Home",
+                "play_type": "pass",
+                "yards_gained": 0,
+                "is_dropback": True,
+                "is_pass_attempt": True,
+                "is_rush_attempt": False,
+                "completion": False,
+                "is_interception": False,
+                "is_td": False,
+                "is_conversion": False,
+                "is_sack": False,
+                "is_fumble": False,
+                "fumble_recovered_by": None,
+                "is_safety": False,
+                "is_defensive_td": False,
+                "is_penalty": False,
+                "fg_result": None,
+                "raw_text": "placeholder",
+            }
+            row.update(overrides)
+            return row
+
+        insert_rows(
+            self.conn,
+            "plays",
+            [
+                base_play(1, completion=True, yards_gained=20),
+                base_play(2, is_pass_attempt=False, is_rush_attempt=True, is_sack=True, yards_gained=-7),
+                base_play(
+                    3,
+                    yards_gained=-3,
+                    is_fumble=True,
+                    fumble_recovered_by="HOMEPRE John Smith",
+                    is_td=True,
+                    raw_text=(
+                        "Away QB pass complete, fumble recovered by "
+                        "HOMEPRE John Smith, return 30 yards, TOUCHDOWN, clock 05:00."
+                    ),
+                ),
+            ],
+        )
+        insert_rows(
+            self.conn,
+            "field_position_crosswalk",
+            [
+                {
+                    "season": "2025-26",
+                    "source_plays_run_id": "plays-fix",
+                    "game_id": "g-fix",
+                    "prefix": "HOMEPRE",
+                    "canonical_team": "Home",
+                    "resolution_method": "manual",
+                    "note": "test fixture",
+                    "resolved_at": "2026-01-01 00:00:00",
+                },
+            ],
+        )
+
+    def tearDown(self) -> None:
+        self.conn.close()
+        self._tmpdir.cleanup()
+
+    def test_offense_pass_td_excludes_defensive_td_and_computes_sack_rate(self) -> None:
+        rows = load_team_stats(self.conn, side="offense", grain="season", family="passing", season="2025-26")
+        away = next(r for r in rows if r["team_name"] == "Away")
+        self.assertEqual(away["pass_att"], 2)
+        self.assertEqual(away["pass_td"], 0)
+        self.assertEqual(away["sacks"], 1)
+        self.assertEqual(away["dropbacks"], 3)
+        self.assertEqual(away["sack_rate"], 33.3)
+
+    def test_defense_opp_pass_td_excludes_own_defensive_score(self) -> None:
+        rows = load_team_stats(self.conn, side="defense", grain="season", family="passing", season="2025-26")
+        home = next(r for r in rows if r["team_name"] == "Home")
+        self.assertEqual(home["pass_td"], 0)
+
+
 if __name__ == "__main__":
     unittest.main()

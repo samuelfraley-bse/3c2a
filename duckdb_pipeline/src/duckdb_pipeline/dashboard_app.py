@@ -22,6 +22,7 @@ import streamlit as st
 from st_aggrid import AgGrid, GridOptionsBuilder, JsCode
 
 from duckdb_pipeline import dashboard_data as dd
+from duckdb_pipeline import report_data as rd
 from duckdb_pipeline.constants import DEFAULT_DB_PATH
 
 SCORE_MARGIN_BUCKETS = [
@@ -51,6 +52,7 @@ COLUMN_LABELS: dict[str, str] = {
     "pass_int": "INT",
     "dropbacks": "Dropbacks",
     "sacks": "Sacks",
+    "sack_rate": "Sack %",
     "pass_success_rate": "Success %",
     "pass_explosive_rate": "Explosive %",
     "pass_comp_10_plus": "10+ Yd Comp",
@@ -83,6 +85,7 @@ COLUMN_WIDTHS: dict[str, int] = {
     "pass_int": 70,
     "dropbacks": 100,
     "sacks": 80,
+    "sack_rate": 90,
     "pass_success_rate": 100,
     "pass_explosive_rate": 110,
     "pass_comp_10_plus": 110,
@@ -99,6 +102,21 @@ COLUMN_WIDTHS: dict[str, int] = {
     "rush_20_plus": 110,
 }
 _DEFAULT_COLUMN_WIDTH = 90
+
+# Team Leaders: player_lineup_stats has ~50 columns, but any given position
+# group only fills in a handful of them (a WR's passing/tackling columns are
+# all None) -- show identity columns + only the stats relevant to that
+# category, not every column that happens to exist on the row.
+_TEAM_LEADERS_IDENTITY_COLUMNS = ["full_name", "uniform", "position", "year"]
+TEAM_LEADERS_DISPLAY_COLUMNS: dict[str, list[str]] = {
+    "passing": _TEAM_LEADERS_IDENTITY_COLUMNS + [
+        "pass_att", "pass_comp", "pass_pct", "pass_yds", "pass_td", "pass_int", "pass_ypa", "pass_rating",
+    ],
+    "rushing": _TEAM_LEADERS_IDENTITY_COLUMNS + ["rush_att", "rush_yds", "rush_ypc", "rush_td", "rush_lg"],
+    "receiving": _TEAM_LEADERS_IDENTITY_COLUMNS + ["rec", "rec_yds", "rec_ypc", "rec_td", "rec_lg"],
+    "tackles": _TEAM_LEADERS_IDENTITY_COLUMNS + ["tackles_total", "tackles_solo", "tackles_ast", "tfl"],
+    "sacks": _TEAM_LEADERS_IDENTITY_COLUMNS + ["sacks", "sack_yds", "tfl"],
+}
 
 _ROW_STRIPE_JS = JsCode(
     """
@@ -245,6 +263,143 @@ def render_grid(rows: list[dict[str, object]], side: str) -> None:
     )
 
 
+def _render_labeled_rows(rows: list[dict[str, object]]) -> None:
+    """Renders a list of {"label", "value", "rank"} dicts as a plain 3-column
+    table -- for reading/copying a handful of numbers, not sorting across
+    many teams, so no AgGrid here (see `render_grid` for that treatment).
+    """
+    if not rows:
+        st.info("No data.")
+        return
+    st.dataframe(pd.DataFrame(rows), hide_index=True, width='stretch')
+
+
+def _render_matchup_rows(rows: list[dict[str, object]], team_label: str, opponent_label: str) -> None:
+    """Renders report_data.py's matchup-shaped rows (a mix of {"section": ...}
+    divider rows and {"label","off_value","off_rank","def_value","def_rank"}
+    rows) as one table -- same shape used by load_production_matchup and
+    load_situation_trimmed.
+    """
+    if not rows:
+        st.info("No data.")
+        return
+    table_rows = []
+    for row in rows:
+        if "section" in row:
+            table_rows.append({"Metric": f"— {row['section']} —"})
+            continue
+        table_rows.append(
+            {
+                "Metric": row["label"],
+                team_label: row.get("off_value"),
+                f"{team_label} Rank": row.get("off_rank"),
+                opponent_label: row.get("def_value"),
+                f"{opponent_label} Rank": row.get("def_rank"),
+            }
+        )
+    st.dataframe(pd.DataFrame(table_rows), hide_index=True, width='stretch')
+
+
+def _render_report_prep(conn, season: str) -> None:
+    teams = dd.list_teams(conn, season)
+    if len(teams) < 2:
+        st.info("Need at least two teams with data this season.")
+        return
+    pick_row = st.columns(2)
+    team = pick_row[0].selectbox("Team", teams, key="report_prep_team")
+    opponent_options = [t for t in teams if t != team]
+    opponent = pick_row[1].selectbox("Opponent", opponent_options, key="report_prep_opponent")
+
+    recap_tab, quick_hitters_tab, leaders_tab, matchup_tab, identity_tab = st.tabs(
+        ["Season Recap", "Quick Hitters", "Team Leaders", "Match-Up", "Identity"]
+    )
+
+    with recap_tab:
+        for label, name in [(team, team), (opponent, opponent)]:
+            recap = rd.load_schedule_recap(conn, season, name)
+            st.subheader(name)
+            standings = recap["standings"] or {}
+            st.write(
+                f"Overall: {standings.get('wins', '?')}-{standings.get('losses', '?')}"
+                f"-{standings.get('ties', 0)}  |  "
+                f"Conference: {standings.get('conference_wins', '?')}-{standings.get('conference_losses', '?')}"
+                f"-{standings.get('conference_ties', 0)}"
+            )
+            st.dataframe(pd.DataFrame(recap["games"]), hide_index=True, width='stretch')
+
+    with quick_hitters_tab:
+        for name in [team, opponent]:
+            qh = rd.load_quick_hitters(conn, season, name)
+            st.subheader(name)
+            off_col, def_col = st.columns(2)
+            with off_col:
+                st.caption("Offense")
+                _render_labeled_rows(qh["offense"])
+            with def_col:
+                st.caption("Defense")
+                _render_labeled_rows(qh["defense"])
+
+    with leaders_tab:
+        for name in [team, opponent]:
+            leaders = rd.load_team_leaders(conn, season, name)
+            st.subheader(name)
+            for category_label, key in [
+                ("Passing", "passing"), ("Rushing", "rushing"), ("Receiving", "receiving"),
+                ("Tackles", "tackles"), ("Sacks", "sacks"),
+            ]:
+                st.caption(category_label)
+                rows = leaders[key]
+                if not rows:
+                    st.info("No data.")
+                    continue
+                df = pd.DataFrame(rows)
+                columns = [c for c in TEAM_LEADERS_DISPLAY_COLUMNS[key] if c in df.columns]
+                st.dataframe(df[columns], hide_index=True, width='stretch')
+
+    with matchup_tab:
+        production = rd.load_production_matchup(conn, season, team, opponent)
+        situation = rd.load_situation_trimmed(conn, season, team, opponent)
+        st.subheader(f"{team} Offense vs {opponent} Defense")
+        _render_matchup_rows(production["team_offense_vs_opponent_defense"], team, opponent)
+        st.subheader(f"{opponent} Offense vs {team} Defense")
+        _render_matchup_rows(production["opponent_offense_vs_team_defense"], opponent, team)
+        st.subheader(f"Early & Third Down: {team} Offense vs {opponent} Defense")
+        _render_matchup_rows(situation["team_offense_vs_opponent_defense"], team, opponent)
+        st.subheader(f"Early & Third Down: {opponent} Offense vs {team} Defense")
+        _render_matchup_rows(situation["opponent_offense_vs_team_defense"], opponent, team)
+
+    with identity_tab:
+        for name in [team, opponent]:
+            identity = rd.load_identity(conn, season, name)
+            st.subheader(name)
+            for side_label, side_key in [("Offense", "offense"), ("Defense", "defense")]:
+                side = identity[side_key]
+                st.markdown(f"**{side_label} Identity**")
+                st.write(
+                    f"% Run: {side['rush_pct']}  |  % Pass: {side['pass_pct']}  |  "
+                    f"Yards/Carry: {side['rush_ypa']} (conf. avg {side['conference_avg_rush_ypa']})  |  "
+                    f"Yards/Att: {side['pass_ypa']} (conf. avg {side['conference_avg_pass_ypa']})"
+                )
+                fp_col, tempo_col = st.columns(2)
+                with fp_col:
+                    st.caption("Field Position")
+                    _render_labeled_rows(side["field_position"])
+                with tempo_col:
+                    st.caption("Tempo")
+                    _render_labeled_rows(side["tempo"])
+                rush_col, pass_col = st.columns(2)
+                with rush_col:
+                    st.caption("Rushing")
+                    _render_labeled_rows(side["rushing"])
+                with pass_col:
+                    st.caption("Passing")
+                    _render_labeled_rows(side["passing"])
+                st.caption("Situation Run Rate")
+                st.dataframe(pd.DataFrame([side["situation_run_rate"]]), hide_index=True, width='stretch')
+            st.caption("Weekly Success Rate (Offense/Defense vs. conference average)")
+            st.dataframe(pd.DataFrame(identity["weekly_success_rate"]), hide_index=True, width='stretch')
+
+
 def main() -> None:
     st.title("Foothill Analyst Dashboard")
 
@@ -256,9 +411,20 @@ def main() -> None:
         st.error("No data found in this database.")
         return
 
+    stats_tab, report_prep_tab = st.tabs(["Team Stats", "Report Prep"])
+
+    with report_prep_tab:
+        prep_season = st.selectbox("Season", seasons, index=len(seasons) - 1, key="report_prep_season")
+        _render_report_prep(conn, prep_season)
+
+    with stats_tab:
+        _render_team_stats(conn, seasons)
+
+
+def _render_team_stats(conn, seasons: list[str]) -> None:
     st.subheader("Filters")
     id_row = st.columns(4)
-    season = id_row[0].selectbox("Season", seasons, index=len(seasons) - 1)
+    season = id_row[0].selectbox("Season", seasons, index=len(seasons) - 1, key="team_stats_season")
 
     weeks = dd.list_weeks(conn, season)
     week = _none_if_all(id_row[1].selectbox("Week", ["All"] + [str(w) for w in weeks]))

@@ -41,6 +41,7 @@ OFFENSE_METRIC_DIRECTION: dict[str, bool | None] = {
     "pass_int": False,
     "dropbacks": None,
     "sacks": False,
+    "sack_rate": False,
     "pass_success_rate": True,
     "pass_explosive_rate": True,
     "pass_comp_10_plus": True,
@@ -81,7 +82,12 @@ _PASSING_BASE_SUMS = """
         END
     ) AS pass_yds,
     SUM(CASE WHEN is_interception THEN 1 ELSE 0 END) AS pass_int,
-    SUM(CASE WHEN play_type = 'pass' AND is_td THEN 1 ELSE 0 END) AS pass_td,
+    -- is_defensive_td guard: a fumble recovered and returned for a score by
+    -- the DEFENSE can carry a misleading raw is_td=True (see METRICS.md's
+    -- is_defensive_td section) -- without this, that defensive touchdown
+    -- gets miscredited as this offense's own passing TD. Same fix as
+    -- db.py's v_team_game_offense_current/_defense_current.
+    SUM(CASE WHEN play_type = 'pass' AND is_td AND NOT COALESCE(is_defensive_td, FALSE) THEN 1 ELSE 0 END) AS pass_td,
     SUM(CASE WHEN is_dropback THEN 1 ELSE 0 END) AS dropbacks,
     SUM(CASE WHEN is_sack THEN 1 ELSE 0 END) AS sacks,
     SUM(CASE WHEN is_pass_attempt AND is_success THEN 1 ELSE 0 END) AS pass_successes,
@@ -103,6 +109,10 @@ _PASSING_OUTER = """
     pass_int,
     dropbacks,
     sacks,
+    -- Sacks as a share of dropbacks (pass_att + sacks -- is_dropback is
+    -- true for both pass attempts and sacks, per this project's own
+    -- convention documented in README.md), not of pass_att alone.
+    ROUND(100.0 * sacks / NULLIF(dropbacks, 0), 1) AS sack_rate,
     ROUND(100.0 * pass_successes / NULLIF(pass_att, 0), 1) AS pass_success_rate,
     ROUND(100.0 * pass_explosive / NULLIF(pass_att, 0), 1) AS pass_explosive_rate,
     pass_comp_10_plus,
@@ -116,7 +126,8 @@ _PASSING_OUTER = """
 _RUSHING_BASE_SUMS = """
     SUM(CASE WHEN is_rush_attempt THEN 1 ELSE 0 END) AS rush_att,
     SUM(CASE WHEN is_rush_attempt THEN COALESCE(yards_gained, 0) ELSE 0 END) AS rush_yds,
-    SUM(CASE WHEN is_rush_attempt AND is_td THEN 1 ELSE 0 END) AS rush_td,
+    -- is_defensive_td guard: see pass_td above.
+    SUM(CASE WHEN is_rush_attempt AND is_td AND NOT COALESCE(is_defensive_td, FALSE) THEN 1 ELSE 0 END) AS rush_td,
     SUM(CASE WHEN is_rush_attempt AND is_success THEN 1 ELSE 0 END) AS rush_successes,
     SUM(CASE WHEN explosive_rush THEN 1 ELSE 0 END) AS rush_explosive,
     SUM(CASE WHEN is_stuffed THEN 1 ELSE 0 END) AS stuffed_runs,

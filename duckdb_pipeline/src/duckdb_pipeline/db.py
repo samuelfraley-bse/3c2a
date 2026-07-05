@@ -252,7 +252,14 @@ def _refresh_views(conn) -> None:
             f.field_position_run_id,
             p.source_run_id AS plays_source_structure_run_id,
             p.reparsed_from_plays_run_id,
-            f.source_plays_run_id AS field_position_source_plays_run_id
+            f.source_plays_run_id AS field_position_source_plays_run_id,
+            -- True whenever the current field_position run wasn't built
+            -- from the current plays run (including "no field_position run
+            -- exists at all yet") -- i.e. play_field_positions/yardline_100
+            -- is stale and needs `apply_field_positions` re-run. See
+            -- LOGS.md: this used to fail silently (yardline_100 just went
+            -- NULL) until this column made it visible.
+            (f.source_plays_run_id IS NULL OR f.source_plays_run_id <> p.plays_run_id) AS field_position_is_stale
         FROM v_current_structure_runs s
         FULL OUTER JOIN v_current_plays_runs p
             ON p.season = s.season
@@ -624,13 +631,19 @@ def _refresh_views(conn) -> None:
             pfp.prefix_owner,
             pfp.field_pos_side,
             pfp.yardline_100,
+            -- yardline_100 is distance remaining to the opponent's goal
+            -- line (confirmed against crosswalk.py's own formula and real
+            -- plays: a 1-yard touchdown rush lands at yardline_100=1) --
+            -- LOWER is closer to scoring. These labels were previously
+            -- inverted (backed_up/red_zone swapped) with no downstream
+            -- consumer having caught it yet; fixed here.
             CASE
                 WHEN pfp.yardline_100 IS NULL THEN NULL
-                WHEN pfp.yardline_100 <= 20 THEN 'backed_up'
-                WHEN pfp.yardline_100 <= 49 THEN 'own_territory'
+                WHEN pfp.yardline_100 <= 20 THEN 'red_zone'
+                WHEN pfp.yardline_100 <= 49 THEN 'opponent_territory'
                 WHEN pfp.yardline_100 <= 60 THEN 'midfield'
-                WHEN pfp.yardline_100 <= 79 THEN 'fringe'
-                ELSE 'red_zone'
+                WHEN pfp.yardline_100 <= 79 THEN 'own_territory'
+                ELSE 'backed_up'
             END AS field_zone,
             pfp.resolution_status AS field_position_status,
             CASE
@@ -900,10 +913,12 @@ def _refresh_views(conn) -> None:
             ROUND(100.0 * drives_scored / NULLIF(drives, 0), 1) AS pct_drives_scored,
             ROUND(100.0 * drives_three_and_out / NULLIF(drives, 0), 1) AS pct_drives_three_and_out,
             ROUND(total_scrimmage_plays / NULLIF(games, 0), 1) AS plays_per_game,
-            -- Higher starting field position (closer to the opponent's goal
-            -- line, per the yardline_100 convention used in field_zone
-            -- elsewhere in this file) is better for the offense.
-            RANK() OVER (PARTITION BY season ORDER BY total_start_yardline_100 / NULLIF(drives, 0) DESC) AS avg_start_yardline_100_rank,
+            -- yardline_100 is distance remaining to the opponent's goal
+            -- line -- LOWER is a better starting position for the offense
+            -- (confirmed against crosswalk.py's formula and real plays: a
+            -- 1-yard TD rush lands at yardline_100=1). Previously ranked
+            -- DESC on the wrong assumption that higher was better; fixed.
+            RANK() OVER (PARTITION BY season ORDER BY total_start_yardline_100 / NULLIF(drives, 0) ASC) AS avg_start_yardline_100_rank,
             RANK() OVER (PARTITION BY season ORDER BY 100.0 * drives_scored / NULLIF(drives, 0) DESC) AS pct_drives_scored_rank,
             RANK() OVER (PARTITION BY season ORDER BY 100.0 * drives_three_and_out / NULLIF(drives, 0) ASC) AS pct_drives_three_and_out_rank
             -- avg_plays_per_drive/plays_per_game deliberately have no rank
@@ -922,9 +937,12 @@ def _refresh_views(conn) -> None:
             ROUND(100.0 * drives_scored / NULLIF(drives, 0), 1) AS pct_drives_scored,
             ROUND(100.0 * drives_three_and_out / NULLIF(drives, 0), 1) AS pct_drives_three_and_out,
             ROUND(total_scrimmage_plays / NULLIF(games, 0), 1) AS plays_per_game,
-            -- Defense: pinning the opponent's average starting field
-            -- position back (lower yardline_100) is good.
-            RANK() OVER (PARTITION BY season ORDER BY total_start_yardline_100 / NULLIF(drives, 0) ASC) AS avg_start_yardline_100_rank,
+            -- yardline_100 is distance remaining to the opponent's (here:
+            -- this team's own) goal line -- pinning the opposing offense
+            -- back means forcing a HIGH average starting yardline_100 for
+            -- them, so that's the good outcome for this team's defense.
+            -- Previously ranked ASC on the wrong assumption; fixed.
+            RANK() OVER (PARTITION BY season ORDER BY total_start_yardline_100 / NULLIF(drives, 0) DESC) AS avg_start_yardline_100_rank,
             -- Allowing fewer opponent scoring drives is good.
             RANK() OVER (PARTITION BY season ORDER BY 100.0 * drives_scored / NULLIF(drives, 0) ASC) AS pct_drives_scored_rank,
             -- Forcing more opponent 3-and-outs is good.
@@ -1016,10 +1034,18 @@ def _refresh_views(conn) -> None:
                 END
             ) AS pass_yds,
             SUM(CASE WHEN pc.is_interception THEN 1 ELSE 0 END) AS pass_int,
+            -- `AND NOT COALESCE(pc.is_defensive_td, FALSE)`: a fumble
+            -- recovered and returned for a score by the DEFENSE can carry a
+            -- misleading raw is_td=True (see METRICS.md's is_defensive_td
+            -- section) -- without this guard, that defensive touchdown gets
+            -- double-miscredited as this offense's own passing/rushing TD,
+            -- which then inflates passer_rating (+330 per phantom TD).
+            -- Confirmed 5 real instances in the 2025-26 season data.
             SUM(
                 CASE
                     WHEN pc.play_type = 'pass'
                      AND pc.is_td
+                     AND NOT COALESCE(pc.is_defensive_td, FALSE)
                     THEN 1
                     ELSE 0
                 END
@@ -1031,7 +1057,15 @@ def _refresh_views(conn) -> None:
             SUM(CASE WHEN pc.completion AND COALESCE(pc.yards_gained, 0) >= 20 THEN 1 ELSE 0 END) AS pass_comp_20_plus,
             SUM(CASE WHEN pc.is_rush_attempt THEN 1 ELSE 0 END) AS rush_att,
             SUM(CASE WHEN pc.is_rush_attempt THEN COALESCE(pc.yards_gained, 0) ELSE 0 END) AS rush_yds,
-            SUM(CASE WHEN pc.is_rush_attempt AND pc.is_td THEN 1 ELSE 0 END) AS rush_td,
+            SUM(
+                CASE
+                    WHEN pc.is_rush_attempt
+                     AND pc.is_td
+                     AND NOT COALESCE(pc.is_defensive_td, FALSE)
+                    THEN 1
+                    ELSE 0
+                END
+            ) AS rush_td,
             SUM(CASE WHEN pc.is_rush_attempt AND pc.is_success THEN 1 ELSE 0 END) AS rush_successes,
             SUM(CASE WHEN pc.is_rush_attempt AND COALESCE(pc.yards_gained, 0) >= 10 THEN 1 ELSE 0 END) AS rush_10_plus,
             SUM(CASE WHEN pc.is_rush_attempt AND COALESCE(pc.yards_gained, 0) >= 20 THEN 1 ELSE 0 END) AS rush_20_plus,
@@ -1058,6 +1092,7 @@ def _refresh_views(conn) -> None:
                 completion,
                 is_interception,
                 is_td,
+                is_defensive_td,
                 is_sack,
                 is_success,
                 is_stuffed,
@@ -1141,10 +1176,15 @@ def _refresh_views(conn) -> None:
                 END
             ) AS opp_pass_yds,
             SUM(CASE WHEN pc.is_interception THEN 1 ELSE 0 END) AS interceptions_forced,
+            -- Same is_defensive_td guard as v_team_game_offense_current: if
+            -- WE (this row's defense) recovered a fumble and returned it for
+            -- a score, that's not a touchdown the opponent's offense should
+            -- get credit for allowing/throwing -- it's our own defensive TD.
             SUM(
                 CASE
                     WHEN pc.play_type = 'pass'
                      AND pc.is_td
+                     AND NOT COALESCE(pc.is_defensive_td, FALSE)
                     THEN 1
                     ELSE 0
                 END
@@ -1156,7 +1196,15 @@ def _refresh_views(conn) -> None:
             SUM(CASE WHEN pc.completion AND COALESCE(pc.yards_gained, 0) >= 20 THEN 1 ELSE 0 END) AS opp_pass_comp_20_plus,
             SUM(CASE WHEN pc.is_rush_attempt THEN 1 ELSE 0 END) AS opp_rush_att,
             SUM(CASE WHEN pc.is_rush_attempt THEN COALESCE(pc.yards_gained, 0) ELSE 0 END) AS opp_rush_yds,
-            SUM(CASE WHEN pc.is_rush_attempt AND pc.is_td THEN 1 ELSE 0 END) AS opp_rush_td,
+            SUM(
+                CASE
+                    WHEN pc.is_rush_attempt
+                     AND pc.is_td
+                     AND NOT COALESCE(pc.is_defensive_td, FALSE)
+                    THEN 1
+                    ELSE 0
+                END
+            ) AS opp_rush_td,
             SUM(CASE WHEN pc.is_rush_attempt AND pc.is_success THEN 1 ELSE 0 END) AS opp_rush_successes,
             SUM(CASE WHEN pc.is_rush_attempt AND COALESCE(pc.yards_gained, 0) >= 10 THEN 1 ELSE 0 END) AS opp_rush_10_plus,
             SUM(CASE WHEN pc.is_rush_attempt AND COALESCE(pc.yards_gained, 0) >= 20 THEN 1 ELSE 0 END) AS opp_rush_20_plus,
@@ -1437,7 +1485,9 @@ def _refresh_views(conn) -> None:
             RANK() OVER (PARTITION BY season ORDER BY rush_explosive_rate DESC) AS rush_explosive_rate_rank,
             RANK() OVER (PARTITION BY season ORDER BY pass_explosive_rate DESC) AS pass_explosive_rate_rank,
             -- Lower is better for the offense (fewer of its own rushes get stuffed).
-            RANK() OVER (PARTITION BY season ORDER BY run_stuff_rate ASC) AS run_stuff_rate_rank
+            RANK() OVER (PARTITION BY season ORDER BY run_stuff_rate ASC) AS run_stuff_rate_rank,
+            -- Lower is better for the offense (its QB gets sacked less).
+            RANK() OVER (PARTITION BY season ORDER BY sack_rate ASC) AS sack_rate_rank
         FROM (
             SELECT
                 season,
@@ -1484,6 +1534,10 @@ def _refresh_views(conn) -> None:
                 ROUND(100.0 * rush_explosive / NULLIF(rush_att, 0), 1) AS rush_explosive_rate,
                 ROUND(100.0 * pass_explosive / NULLIF(pass_att, 0), 1) AS pass_explosive_rate,
                 ROUND(100.0 * stuffed_runs / NULLIF(rush_att, 0), 1) AS run_stuff_rate,
+                -- Sacks as a share of dropbacks (pass_att + sacks -- see the
+                -- is_dropback convention documented in README.md), not of
+                -- pass_att alone.
+                ROUND(100.0 * sacks / NULLIF(dropbacks, 0), 1) AS sack_rate,
                 -- NCAA college passer-efficiency formula (no clamps, unlike
                 -- the NFL rating): (8.4*Yds + 330*TD + 100*Comp - 200*Int) / Att.
                 ROUND(
@@ -1526,7 +1580,9 @@ def _refresh_views(conn) -> None:
             RANK() OVER (PARTITION BY season ORDER BY opp_rush_explosive_rate ASC) AS opp_rush_explosive_rate_rank,
             RANK() OVER (PARTITION BY season ORDER BY opp_pass_explosive_rate ASC) AS opp_pass_explosive_rate_rank,
             -- Higher is better for the defense (more of the opponent's rushes get stuffed).
-            RANK() OVER (PARTITION BY season ORDER BY opp_run_stuff_rate DESC) AS opp_run_stuff_rate_rank
+            RANK() OVER (PARTITION BY season ORDER BY opp_run_stuff_rate DESC) AS opp_run_stuff_rate_rank,
+            -- Higher is better for the defense (sacking the opposing QB more).
+            RANK() OVER (PARTITION BY season ORDER BY opp_sack_rate DESC) AS opp_sack_rate_rank
         FROM (
             SELECT
                 season,
@@ -1565,6 +1621,7 @@ def _refresh_views(conn) -> None:
                 ROUND(100.0 * opp_rush_explosive / NULLIF(opp_rush_att, 0), 1) AS opp_rush_explosive_rate,
                 ROUND(100.0 * opp_pass_explosive / NULLIF(opp_pass_att, 0), 1) AS opp_pass_explosive_rate,
                 ROUND(100.0 * stuffed_runs_forced / NULLIF(opp_rush_att, 0), 1) AS opp_run_stuff_rate,
+                ROUND(100.0 * sacks_forced / NULLIF(opp_dropbacks, 0), 1) AS opp_sack_rate,
                 ROUND(
                     (8.4 * opp_pass_yds + 330 * opp_pass_td + 100 * opp_pass_comp - 200 * interceptions_forced)
                     / NULLIF(opp_pass_att, 0),
@@ -1692,7 +1749,16 @@ def _refresh_views(conn) -> None:
                         ELSE 0
                     END
                 ) AS pass_yds,
-                SUM(CASE WHEN play_type = 'pass' AND is_td THEN 1 ELSE 0 END) AS pass_td,
+                -- is_defensive_td guard: see v_team_game_offense_current.
+                SUM(
+                    CASE
+                        WHEN play_type = 'pass'
+                         AND is_td
+                         AND NOT COALESCE(is_defensive_td, FALSE)
+                        THEN 1
+                        ELSE 0
+                    END
+                ) AS pass_td,
                 SUM(CASE WHEN is_interception THEN 1 ELSE 0 END) AS pass_int
             FROM v_play_context_current
             WHERE is_pass_attempt

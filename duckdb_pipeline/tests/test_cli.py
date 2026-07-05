@@ -4,11 +4,39 @@ import unittest
 from datetime import datetime, timezone
 
 from duckdb_pipeline.cli import (
+    _auto_refresh_field_positions,
     _load_field_position_review_queue,
     _preseed_memory_crosswalk_rows,
+    main_rebuild_plays_from_raw,
     main_rebuild_structure_from_raw,
 )
 from duckdb_pipeline.db import connect, init_db, insert_rows
+
+PBP_HTML_TWO_TEAMS = """
+<html>
+  <head>
+    <meta property="og:title" content="Foothill vs. San Mateo - Box Score - 9/6/2025" />
+  </head>
+  <body>
+    <table>
+      <tr><td id="qtr1">1st Quarter</td></tr>
+      <tr><th colspan="2">Foothill at 15:00</th></tr>
+      <tr>
+        <td>1st and 10 at FOOTHILL25</td>
+        <td>John Smith rush for 5 yards to the FOOTHILL30 (Mike Jones).</td>
+      </tr>
+      <tr>
+        <td>2nd and 5 at FOOTHILL30</td>
+        <td>John Smith pass complete to Alex Ray for 12 yards to the SAN MATE48 (Ty Lee).</td>
+      </tr>
+      <tr>
+        <td>1st and 10 at SAN MATE48</td>
+        <td>PENALTY SAN MATE holding (Ty Lee) 10 yards</td>
+      </tr>
+    </table>
+  </body>
+</html>
+"""
 
 
 STANDINGS_HTML = """
@@ -395,6 +423,245 @@ class CliTests(unittest.TestCase):
                 """
             ).fetchone()[0]
             self.assertEqual(latest_stage, "structure")
+            conn.close()
+
+    def test_rebuild_plays_from_raw_auto_applies_field_position_when_memory_resolves_everything(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = f"{tmpdir}/test.duckdb"
+            conn = connect(db_path)
+            init_db(conn)
+            insert_rows(
+                conn,
+                "pipeline_runs",
+                [
+                    {
+                        "run_id": "structure-1",
+                        "season": "2025-26",
+                        "started_at": "2026-01-01 00:00:00",
+                        "finished_at": "2026-01-01 00:01:00",
+                        "status": "completed",
+                        "stage": "structure",
+                        "notes": None,
+                    },
+                    {
+                        "run_id": "plays-old",
+                        "season": "2025-26",
+                        "started_at": "2026-01-01 00:02:00",
+                        "finished_at": "2026-01-01 00:03:00",
+                        "status": "completed",
+                        "stage": "plays",
+                        "notes": '{"source_run_id": "structure-1"}',
+                    },
+                ],
+            )
+            insert_rows(
+                conn,
+                "games",
+                [
+                    {
+                        "run_id": "structure-1",
+                        "season": "2025-26",
+                        "game_id": "20250906_abcd",
+                        "game_date": "20250906",
+                        "pbp_url": "https://example.test/pbp",
+                        "schedule_home": "Foothill",
+                        "schedule_away": "San Mateo",
+                        "home_team_canonical": "Foothill",
+                        "away_team_canonical": "San Mateo",
+                        "team_1": "Foothill",
+                        "team_2": "San Mateo",
+                        "schedule_row_count": 2,
+                        "unique_team_count": 2,
+                        "pairing_status": "paired",
+                    }
+                ],
+            )
+            insert_rows(
+                conn,
+                "raw_pbp_html",
+                [
+                    {
+                        "run_id": "plays-old",
+                        "season": "2025-26",
+                        "source_run_id": "structure-1",
+                        "game_id": "20250906_abcd",
+                        "fetched_at": datetime.now(timezone.utc),
+                        "source_url": "https://example.test/pbp",
+                        "html_text": PBP_HTML_TWO_TEAMS,
+                    }
+                ],
+            )
+            # _resolve_plays_run_id validates the source run_id against the
+            # actual `plays` table (not just the pipeline_runs audit row) --
+            # a minimal placeholder row is enough to satisfy that check.
+            insert_rows(
+                conn,
+                "plays",
+                [
+                    {
+                        "run_id": "plays-old",
+                        "season": "2025-26",
+                        "game_id": "20250906_abcd",
+                        "play_id": 1,
+                    }
+                ],
+            )
+            # Prior confirmed crosswalk memory from an earlier week/run --
+            # same prefixes this reparse will detect, so nothing here should
+            # need manual review.
+            insert_rows(
+                conn,
+                "field_position_crosswalk",
+                [
+                    {
+                        "season": "2025-26",
+                        "source_plays_run_id": "some-other-earlier-run",
+                        "game_id": "g-earlier",
+                        "prefix": "FOOTHILL",
+                        "canonical_team": "Foothill",
+                        "resolution_method": "manual",
+                        "note": "",
+                        "resolved_at": datetime.now(timezone.utc),
+                    },
+                    {
+                        "season": "2025-26",
+                        "source_plays_run_id": "some-other-earlier-run",
+                        "game_id": "g-earlier",
+                        "prefix": "SAN MATE",
+                        "canonical_team": "San Mateo",
+                        "resolution_method": "manual",
+                        "note": "",
+                        "resolved_at": datetime.now(timezone.utc),
+                    },
+                ],
+            )
+            conn.close()
+
+            exit_code = main_rebuild_plays_from_raw(
+                ["--season", "2025-26", "--db-path", db_path, "--source-plays-run-id", "plays-old"]
+            )
+            self.assertEqual(exit_code, 0)
+
+            conn = connect(db_path)
+            # Field position should be auto-applied -- not stale -- with no
+            # separate apply_field_positions call.
+            stale = conn.execute(
+                "SELECT field_position_is_stale FROM v_current_runs WHERE season = '2025-26'"
+            ).fetchone()[0]
+            self.assertFalse(stale)
+
+            resolved = conn.execute(
+                """
+                SELECT DISTINCT prefix_owner
+                FROM v_play_field_positions_current
+                WHERE season = '2025-26' AND game_id = '20250906_abcd'
+                ORDER BY prefix_owner
+                """
+            ).fetchall()
+            self.assertEqual(resolved, [("Foothill",), ("San Mateo",)])
+            conn.close()
+
+    def test_auto_refresh_field_positions_does_not_apply_when_prefix_unresolved(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = f"{tmpdir}/test.duckdb"
+            conn = connect(db_path)
+            init_db(conn)
+            insert_rows(
+                conn,
+                "pipeline_runs",
+                [
+                    {
+                        "run_id": "plays-new",
+                        "season": "2025-26",
+                        "started_at": "2026-01-01 00:00:00",
+                        "finished_at": "2026-01-01 00:01:00",
+                        "status": "completed",
+                        "stage": "plays",
+                        "notes": '{"source_run_id": "structure-1"}',
+                    },
+                    {
+                        "run_id": "structure-1",
+                        "season": "2025-26",
+                        "started_at": "2025-12-31 00:00:00",
+                        "finished_at": "2025-12-31 00:01:00",
+                        "status": "completed",
+                        "stage": "structure",
+                        "notes": None,
+                    },
+                ],
+            )
+            insert_rows(
+                conn,
+                "games",
+                [
+                    {
+                        "run_id": "structure-1",
+                        "season": "2025-26",
+                        "game_id": "g-new",
+                        "game_date": "20250913",
+                        "pbp_url": "https://example.test/pbp2",
+                        "schedule_home": "Brand New Team",
+                        "schedule_away": "Another New Team",
+                        "home_team_canonical": "Brand New Team",
+                        "away_team_canonical": "Another New Team",
+                        "team_1": "Brand New Team",
+                        "team_2": "Another New Team",
+                        "schedule_row_count": 2,
+                        "unique_team_count": 2,
+                        "pairing_status": "paired",
+                    }
+                ],
+            )
+            insert_rows(
+                conn,
+                "plays",
+                [
+                    {
+                        "run_id": "plays-new",
+                        "season": "2025-26",
+                        "game_id": "g-new",
+                        "home_team": "Brand New Team",
+                        "away_team": "Another New Team",
+                        "schedule_home": "Brand New Team",
+                        "schedule_away": "Another New Team",
+                        "play_id": 1,
+                        "quarter": 1,
+                        "down": 1,
+                        "distance": 10,
+                        "field_position": "BRANDNEW25",
+                        "yardline_raw": 25,
+                        "offense": "Brand New Team",
+                        "defense": "Another New Team",
+                        "play_type": "rush",
+                        "yards_gained": 5,
+                        "is_dropback": False,
+                        "is_pass_attempt": False,
+                        "is_rush_attempt": True,
+                        "completion": False,
+                        "is_interception": False,
+                        "is_td": False,
+                        "is_sack": False,
+                        "is_fumble": False,
+                        "is_penalty": False,
+                        "raw_text": "placeholder",
+                    },
+                ],
+            )
+            # No prior crosswalk memory exists for "BRANDNEW" -- genuinely
+            # new, unresolvable without a human.
+
+            _auto_refresh_field_positions(conn, "2025-26", "plays-new")
+
+            # Must NOT have auto-applied: no field_position stage run exists,
+            # and the season stays flagged as stale.
+            field_position_run = conn.execute(
+                "SELECT COUNT(*) FROM pipeline_runs WHERE season = '2025-26' AND stage = 'field_position' AND status = 'completed'"
+            ).fetchone()[0]
+            self.assertEqual(field_position_run, 0)
+            stale = conn.execute(
+                "SELECT field_position_is_stale FROM v_current_runs WHERE season = '2025-26'"
+            ).fetchone()[0]
+            self.assertTrue(stale)
             conn.close()
 
 

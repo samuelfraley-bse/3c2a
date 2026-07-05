@@ -55,6 +55,7 @@ These are established project primitives and should be treated as the base footb
     - fumble-return: the parse-time suppression of the offensive `is_td` flag can be wrong when the recovering team's raw abbreviation doesn't textually match the defense's canonical name (e.g. `MSJC-FB` for `Mt. San Jacinto`), or when the recovering player's name gets swept into the stored `fumble_recovered_by` value by the fumble regex (e.g. `FULLERTO Ethan`). `v_play_context_current` resolves this case using the field-position crosswalk (`field_position_crosswalk`, matched as a prefix since `fumble_recovered_by` can carry that trailing junk) rather than trusting the parse-time heuristic; it falls back to the stored `is_td` only when no crosswalk entry exists yet for that game
   - `plays.is_defensive_td` (the stored column) only covers the pick-six case; `v_play_context_current.is_defensive_td` (the view column) is the complete, resolved version — same bronze/silver-vs-gold pattern as `plays.field_position` (raw) vs `v_play_context_current.field_position` (crosswalk-resolved)
   - remaining known gap: blocked-kick-return touchdowns (blocked punt/FG returned for a score) are not covered by either source; confirmed real but rare (~5 instances across the season)
+  - **this resolved `is_defensive_td` must be checked everywhere `is_td` is used to count an offensive touchdown** — `pass_td`/`rush_td` (and `opp_pass_td`/`opp_rush_td`) below had a real bug where they counted raw `is_td` without this exclusion, miscrediting 5 real defensive touchdowns as offensive passing TDs this season. Fixed; see `pass_td` below.
 
 ### Success rate
 
@@ -206,7 +207,8 @@ This gap leaves `score_margin` permanently short (not just temporarily desynced)
 
 - `pass_td`
   - `supported_now`
-  - numerator: count of offensive pass plays where `play_type = 'pass'` and `is_td = true`
+  - numerator: count of offensive pass plays where `play_type = 'pass'`, `is_td = true`, **and `is_defensive_td = false`**
+  - the `is_defensive_td` exclusion matters: a fumble recovered and returned for a score by the *defense* can carry a misleading raw `is_td = true` (see `is_defensive_td` above) — without excluding it, that defensive touchdown gets miscredited as the offense's own passing touchdown, which then distorts `passer_rating` (+330 per phantom TD in the formula below). Found and fixed as a real bug affecting 5 real plays in the 2025-26 season data (each inflating that offense's `passer_rating` by roughly 1-1.5 points); the same guard applies to `rush_td` and to the opponent-facing `opp_pass_td`/`opp_rush_td` on the defense side.
 
 - `interceptions`
   - `supported_now`
@@ -241,8 +243,9 @@ This gap leaves `score_margin` permanently short (not just temporarily desynced)
   - numerator: count of offensive plays where `is_sack = true`
 
 - `sack_rate`
-  - `derived_next`
-  - formula: `sacks / dropbacks`
+  - `supported_now`
+  - formula: `sacks / dropbacks` (not `sacks / pass_attempts` — `dropbacks` is the correct denominator since it already includes sacks, per the `is_dropback` convention documented above)
+  - available at season level on `v_team_season_offense_ranked_current` (`sack_rate`, rank ascending — fewer sacks taken is better) and `v_team_season_defense_ranked_current` (`opp_sack_rate`, rank descending — more sacks forced is better), plus the dashboard's Passing tab at any grain/filter combination
 
 - `passer_rating`
   - `supported_now`
@@ -275,7 +278,7 @@ Status: `supported_now`, with this caveat documented rather than gated behind th
 
 - `rush_td`
   - `supported_now`
-  - numerator: count of offensive plays where `is_rush_attempt = true` and `is_td = true`
+  - numerator: count of offensive plays where `is_rush_attempt = true`, `is_td = true`, and `is_defensive_td = false` (see the `pass_td`/`is_defensive_td` note above — same guard, same bug, same fix)
 
 - `yards_per_carry`
   - `derived_next`
@@ -327,6 +330,7 @@ Defense metrics mirror the same event logic from opponent rows.
   - `supported_now`
 - `opp_pass_td`
   - `supported_now`
+  - same `is_defensive_td` guard as `pass_td` — if this team's own defense recovers a fumble and returns it for a score, that's not a touchdown the opponent's offense should get credit for "allowing/throwing"
 - `opp_interceptions`
   - `supported_now`
   - offense perspective: opponent throws an interception
@@ -345,9 +349,10 @@ Defense metrics mirror the same event logic from opponent rows.
   - `derived_next`
 - `opp_completions_20_plus_rate`
   - `derived_next`
-- `sack_rate_forced`
-  - `derived_next`
+- `opp_sack_rate`
+  - `supported_now`
   - formula: `sacks_forced / opp_dropbacks`
+  - available at season level on `v_team_season_defense_ranked_current` (rank descending — forcing more sacks is better defense) and on the dashboard's Defense > Passing tab
 
 - `opp_passer_rating`
   - `supported_now`
@@ -361,6 +366,7 @@ Defense metrics mirror the same event logic from opponent rows.
   - `supported_now`
 - `opp_rush_td`
   - `supported_now`
+  - same `is_defensive_td` guard as `opp_pass_td`
 - `opp_yards_per_carry`
   - `derived_next`
 - `opp_rushing_success_rate`
@@ -425,15 +431,14 @@ Defense metrics mirror the same event logic from opponent rows.
   - `long = 7+`
 
 - `field_zone`
-  - `derived_next`
-  - recommended first-pass buckets:
-    - `backed_up`
-    - `own_territory`
-    - `midfield`
-    - `fringe`
-    - `red_zone`
-
-Exact yardline cut points should be chosen when `v_play_context_current` is implemented.
+  - `supported_now`, on `v_play_context_current`
+  - `yardline_100` is distance remaining to the opponent's goal line -- LOWER is closer to scoring (confirmed against `crosswalk.py`'s formula and real plays: a 1-yard TD rush lands at `yardline_100=1`). Buckets, ascending `yardline_100`:
+    - `red_zone` (`<= 20`)
+    - `opponent_territory` (`<= 49`)
+    - `midfield` (`<= 60`)
+    - `own_territory` (`<= 79`)
+    - `backed_up` (`> 79`)
+  - **Known-fixed bug**: these labels were previously inverted (`backed_up`/`red_zone` swapped, `own_territory`/`opponent_territory` swapped) on the wrong assumption that higher `yardline_100` meant closer to the opponent's goal. Nothing consumed `field_zone`'s value before this was caught, so no downstream report/dashboard output was affected -- but see `avg_start_yardline_100_rank` below, which was affected.
 
 ### Future filters
 
@@ -501,7 +506,7 @@ Unlike every other metric in this spec, `player_lineup_stats` is **not derived f
 - `v_team_game_drives_offense_current` / `_defense_current` → season → ranked
   - Offense view groups by `offense AS team_name` (the team's own drives); defense view groups by `defense AS team_name` (drives the team's defense faced). **Deliberately the same column names on both, no `opp_` prefix** — unlike other `opp_*` columns in this schema (where a higher value means worse for the team being described), `drives_three_and_out` on the defense view means drives *forced* into a 3-and-out, which is good, not bad. Reusing the `opp_` convention here would misleadingly imply the opposite.
   - Season views carry forward raw per-game sums (`total_scrimmage_plays`, `total_start_yardline_100`), not pre-averaged per-game rates, so the season rollup is a plain `SUM/SUM` — no average-of-averages recovery step needed, matching the `distance_sum`/`distance_n` weighting discipline already used for `avg_distance` in the situational views.
-  - Ranked columns: `avg_start_yardline_100` (offense: higher/closer-to-opponent's-goal is better, ranked DESC; defense: lower/pinning-opponent-back is better, ranked ASC — `yardline_100` convention per `field_zone` elsewhere: higher = closer to the opponent's end zone), `pct_drives_scored` (offense DESC, defense ASC — allowing fewer scoring drives is good), `pct_drives_three_and_out` (offense ASC — fewer is better; defense DESC — forcing more is good).
+  - Ranked columns: `avg_start_yardline_100` — `yardline_100` is distance remaining to the opponent's goal line, so **lower is closer to the opponent's end zone** (confirmed against `crosswalk.py`'s formula and real plays: a 1-yard TD rush lands at `yardline_100=1`). Offense: lower/closer-to-the-opponent's-goal is a better starting position, ranked ASC. Defense: pinning the opposing offense back means forcing a *higher* average starting `yardline_100` for them, ranked DESC. **Known-fixed bug**: both were ranked in the opposite direction until this was caught during the modeling-layer sanity check — real team rankings on this metric were backwards on both the offense and defense drives views before the fix (see `LOGS.md`). `pct_drives_scored` (offense DESC, defense ASC — allowing fewer scoring drives is good), `pct_drives_three_and_out` (offense ASC — fewer is better; defense DESC — forcing more is good).
   - `avg_plays_per_drive` and `plays_per_game`: **no rank column** — tempo has no inherently-better direction, same treatment as `avg_distance`.
 
 ## Advanced Metrics

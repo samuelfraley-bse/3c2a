@@ -680,6 +680,11 @@ def main_plays(argv: list[str] | None = None) -> int:
     parser.add_argument("--delay", type=float, default=DEFAULT_DELAY)
     parser.add_argument("--source-run-id", default=None)
     parser.add_argument("--limit", type=int, default=None)
+    parser.add_argument(
+        "--skip-field-position-refresh",
+        action="store_true",
+        help="Don't auto-refresh field positions for this new plays run (default: auto-refresh).",
+    )
     args = parser.parse_args(argv)
 
     from .db import connect, init_db, insert_rows
@@ -722,6 +727,8 @@ def main_plays(argv: list[str] | None = None) -> int:
             notes=result["summary_notes"],
         )
         log(f"DONE  run_id={run_id} db={args.db_path}")
+        if not args.skip_field_position_refresh:
+            _auto_refresh_field_positions(conn, args.season, run_id)
         return 0
     except KeyboardInterrupt as exc:
         _finish_failed_run(conn, run_id, exc)
@@ -742,6 +749,11 @@ def main_rebuild_plays_from_raw(argv: list[str] | None = None) -> int:
     parser.add_argument("--season", default=DEFAULT_SEASON)
     parser.add_argument("--db-path", default=DEFAULT_DB_PATH)
     parser.add_argument("--source-plays-run-id", default=None)
+    parser.add_argument(
+        "--skip-field-position-refresh",
+        action="store_true",
+        help="Don't auto-refresh field positions for this new plays run (default: auto-refresh).",
+    )
     args = parser.parse_args(argv)
 
     from .db import connect, init_db, insert_rows
@@ -818,6 +830,8 @@ def main_rebuild_plays_from_raw(argv: list[str] | None = None) -> int:
         if zero_play_game_ids:
             log("ZERO  reparse parsed 0 plays for game_ids=" + ", ".join(zero_play_game_ids))
         log(f"DONE  run_id={run_id} db={args.db_path}")
+        if not args.skip_field_position_refresh:
+            _auto_refresh_field_positions(conn, args.season, run_id)
         return 0
     except Exception as exc:
         _finish_failed_run(conn, run_id, exc)
@@ -1026,6 +1040,93 @@ def main_apply_field_positions(argv: list[str] | None = None) -> int:
         raise
     finally:
         conn.close()
+
+
+def _auto_refresh_field_positions(conn, season: str, source_plays_run_id: str) -> None:
+    """Best-effort field-position refresh after a new `plays` run lands,
+    called automatically from `main_plays`/`main_rebuild_plays_from_raw` so
+    `play_field_positions` doesn't silently go stale (see `LOGS.md`: this
+    used to fail silently -- `yardline_100` just went NULL -- until this
+    existed). Reuses the exact same building blocks
+    `main_prepare_field_positions`/`main_apply_field_positions` already use,
+    rather than duplicating that logic.
+
+    If prior confirmed crosswalk memory fully resolves every game in this
+    run (the common case -- confirmed this session to auto-resolve 100% of
+    games, twice in a row), applies immediately, no human involved. If any
+    game is left genuinely unresolved (a new/ambiguous team abbreviation),
+    does NOT auto-apply -- that would mean silently accepting a guess
+    nobody confirmed -- and instead logs exactly what needs manual review.
+    Never raises: a field-position refresh failure must not fail the plays
+    run/reparse that already completed successfully on its own.
+    """
+    from .db import insert_rows
+
+    try:
+        plays_rows = _load_plays_rows(conn, season, source_plays_run_id)
+        structure_run_id = _resolve_structure_run_id_for_plays_run(conn, source_plays_run_id)
+        games_rows = _load_games_rows(conn, season, structure_run_id)
+        games_by_id = {row["game_id"]: row for row in games_rows}
+
+        prefix_rows = build_field_position_prefix_rows(plays_rows, games_by_id, season, source_plays_run_id)
+        conn.execute(
+            "DELETE FROM field_position_prefixes WHERE season = ? AND source_plays_run_id = ?",
+            [season, source_plays_run_id],
+        )
+        insert_rows(conn, "field_position_prefixes", prefix_rows)
+        _preseed_memory_crosswalk_rows(conn, prefix_rows, season, source_plays_run_id)
+
+        unresolved = _load_field_position_review_queue(conn, season, source_plays_run_id, include_resolved=False)
+        if unresolved:
+            log(
+                f"FIELD_POSITION stale for season={season}: {len(unresolved)} game(s) need manual review -- "
+                f"run `prepare_field_positions --season {season} --review` then `apply_field_positions`."
+            )
+            return
+    except Exception as exc:
+        log(f"FIELD_POSITION auto-refresh (prepare) FAILED for season={season}: {exc}")
+        return
+
+    run_id = str(uuid.uuid4())
+    _insert_running_run(conn, run_id, season, stage="field_position")
+    try:
+        crosswalk_rows = conn.execute(
+            """
+            SELECT game_id, prefix, canonical_team
+            FROM field_position_crosswalk
+            WHERE season = ? AND source_plays_run_id = ?
+            """,
+            [season, source_plays_run_id],
+        ).fetchall()
+        crosswalk = {(str(game_id), str(prefix)): str(canonical_team) for game_id, prefix, canonical_team in crosswalk_rows}
+        enriched_rows = build_field_position_rows(plays_rows, crosswalk, season, source_plays_run_id, run_id)
+        insert_rows(conn, "play_field_positions", enriched_rows)
+        unresolved_count = sum(1 for row in enriched_rows if row["resolution_status"] != "resolved")
+        _finish_completed_run(
+            conn,
+            run_id,
+            notes=json.dumps(
+                {
+                    "source_plays_run_id": source_plays_run_id,
+                    "field_position_rows": len(enriched_rows),
+                    "resolved_count": len(enriched_rows) - unresolved_count,
+                    "unresolved_count": unresolved_count,
+                },
+                sort_keys=True,
+            ),
+        )
+        log(
+            f"FIELD_POSITION auto-applied for season={season}: "
+            f"{len(enriched_rows)} rows, {unresolved_count} unresolved."
+        )
+    except Exception as exc:
+        _finish_failed_run(conn, run_id, exc)
+        log(f"FIELD_POSITION auto-apply FAILED for season={season}: {exc}")
+        print(
+            f"Warning: automatic field-position refresh failed ({exc}). "
+            f"Run `apply_field_positions --season {season}` manually.",
+            file=sys.stderr,
+        )
 
 
 def main_build_weekly_report(argv: list[str] | None = None) -> int:
