@@ -17,15 +17,15 @@
 - New plays run `8dbf3dcd-0c87-46ba-8d52-b5be72fdd3b5` (55,850 rows, same count and same 12 zero-play games as the prior best reparse -- nothing else regressed). Field position auto-refresh ran and applied automatically; `v_current_runs.field_position_is_stale = false` for 2025-26.
 - Verified against the real database: `20251018_8uoz` now reads Butte 31 / American River 29 (exact match to the real score); `20250905_11sr` still reads Butte 38 / Laney 30 (yesterday's kickoff-TD fix survived the reparse, as expected since it's a downstream view, not a plays-table change).
 
-**Next steps (not yet done):**
-1. Run the same reparse for the other 2 backfilled seasons, using the source run_ids that actually own `raw_pbp_html` rows (confirmed via `SELECT season, run_id, COUNT(*) FROM raw_pbp_html GROUP BY 1,2`):
-   - `uv run --active rebuild_plays_from_raw --season 2024-25 --db-path data/foothill.duckdb --source-plays-run-id 48c18757-4e23-44bd-ad48-ef38720b316b`
-   - `uv run --active rebuild_plays_from_raw --season 2023-24 --db-path data/foothill.duckdb --source-plays-run-id df6cab6c-556b-4294-b93c-d6578b93b2d2`
-   - Both are local/CPU-bound (no scraping), similar runtime to 2025-26's ~7 minutes end-to-end (mostly the bulk `plays` insert, not the parse itself).
-2. After each, spot-check `v_current_runs.field_position_is_stale = false` and re-run the earlier "diff patched-resolver vs stored plays" scan (see yesterday's entry) restricted to that season to confirm the expected games actually changed and nothing unexpected did.
-3. **2025-26's field-position auto-refresh reported `6149 unresolved` rows this time** (out of 55,850) -- much higher than the "auto-resolves 100% of games" norm documented earlier this project. This is a separate, pre-existing field-position crosswalk gap surfaced by this reparse, not something this fix caused or fixed -- needs `prepare_field_positions --season 2025-26 --review` to see how many *games* (not rows) that actually represents before deciding how to handle it. Flagging clearly rather than investigating tonight.
-4. Spot-check 2-3 more of the ~120 affected games (beyond the two already confirmed) against real scores once all 3 seasons are reparsed, the same way `20251018_8uoz` and `20250905_11sr` were confirmed.
-5. Code (`parse.py`, `scrape.py`, `cli.py`, `test_parse.py`) is already committed -- only the live `.duckdb` reparsing (steps 1-2 above) and the field-position follow-up (step 3) remain.
+**Completed the next morning -- all 3 seasons reparsed and field-position-clean:**
+- 2024-25 reparsed from raw (`--source-plays-run-id 48c18757-4e23-44bd-ad48-ef38720b316b`) -> new plays run `e4e4fe79-c810-4823-b352-bfb84f881e49`, 54,685 rows, same 7 known zero-play games.
+- 2023-24 reparsed from raw (`--source-plays-run-id df6cab6c-556b-4294-b93c-d6578b93b2d2`) -> new plays run `04bfa695-f05f-46c8-ae31-ecb509aec5dc`, 56,202 rows, same 8 known zero-play games.
+- Each reparse flagged exactly 1 game needing manual field-position review, both the same known Mt. San Antonio/Mt. San Jacinto ambiguity from opposite sides (`DATABASE_PLAN.md` already documents "MT. SAN" as ambiguous across games) -- resolved with `resolve_field_position_prefix`, not the interactive `--review` loop (that reads from stdin and doesn't work well non-interactively):
+  - 2024-25 `20240907_vckg`: `MSJC-FB -> Mt. San Jacinto`, `SAC-FB -> Mt. San Antonio`
+  - 2023-24 `20230902_qwy1`: `MSJC -> Mt. San Jacinto`, `MT. SAN -> Mt. San Antonio`
+- **The "6,149 unresolved" number from last night turned out to be a false alarm, not a real gap.** Traced `resolution_status` on `play_field_positions` for the *current* run of each season: every season shows only two statuses, `resolved` and `no-field-position` -- zero `unresolved-prefix` rows anywhere. `no-field-position` is just kickoffs/PATs/two-points/penalties, which structurally never carry a "1st and 10 at TEAM25"-style situation cell in the raw source at all, so there was never anything to resolve for those rows. (An earlier scan that found 1,302 `unresolved-prefix` rows for 2025-26 was querying `play_field_positions` without filtering to the *current* `run_id` -- that table is append-only, so it picked up leftover rows from a stale, pre-fix run still sitting in the table.) Confirmed via `v_current_runs`: `field_position_is_stale = false` for all 3 seasons.
+- Spot-checked both previously-confirmed games survived the full 3-season reparse unchanged: `20251018_8uoz` still Butte 31 / American River 29, `20250905_11sr` still Butte 38 / Laney 30.
+- Remaining open item: spot-check 2-3 more of the ~120 affected games against real scores (only 2 of 120 verified so far) -- not done yet, but no known blockers.
 
 ## 2026-07-25
 
