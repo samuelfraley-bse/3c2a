@@ -25,7 +25,9 @@
   - 2023-24 `20230902_qwy1`: `MSJC -> Mt. San Jacinto`, `MT. SAN -> Mt. San Antonio`
 - **The "6,149 unresolved" number from last night turned out to be a false alarm, not a real gap.** Traced `resolution_status` on `play_field_positions` for the *current* run of each season: every season shows only two statuses, `resolved` and `no-field-position` -- zero `unresolved-prefix` rows anywhere. `no-field-position` is just kickoffs/PATs/two-points/penalties, which structurally never carry a "1st and 10 at TEAM25"-style situation cell in the raw source at all, so there was never anything to resolve for those rows. (An earlier scan that found 1,302 `unresolved-prefix` rows for 2025-26 was querying `play_field_positions` without filtering to the *current* `run_id` -- that table is append-only, so it picked up leftover rows from a stale, pre-fix run still sitting in the table.) Confirmed via `v_current_runs`: `field_position_is_stale = false` for all 3 seasons.
 - Spot-checked both previously-confirmed games survived the full 3-season reparse unchanged: `20251018_8uoz` still Butte 31 / American River 29, `20250905_11sr` still Butte 38 / Laney 30.
-- Remaining open item: spot-check 2-3 more of the ~120 affected games against real scores (only 2 of 120 verified so far) -- not done yet, but no known blockers.
+- Listed Butte's full 2025-26 schedule against the affected-games set: only `20250905_11sr` and `20251018_8uoz` were touched by either fix; the other 9 games ran through the parser unchanged.
+- **User confirmed Butte's season PPG looks right post-fix**: `v_team_season_points_ranked_current` -- 11 games, 322 points scored / 241 allowed, `ppg=29.3` (34th in conference), `ppg_allowed=21.9` (14th).
+- Remaining open item: only 2 of the ~120 affected games have been checked against real scores so far (both Butte's). The other ~118 (non-Butte) games touched by the possession-crosswalk fix haven't been individually spot-checked -- no known blockers, just not yet done.
 
 ## 2026-07-25
 
