@@ -121,6 +121,7 @@ def scrape_plays(
     delay: float,
     run_id: str,
     source_run_id: str,
+    team_prefix_memory: dict[str, set[str]] | None = None,
 ) -> dict[str, object]:
     session = build_session()
     raw_pbp_rows: list[dict[str, object]] = []
@@ -178,7 +179,7 @@ def scrape_plays(
                 "html_text": html,
             }
         )
-        parsed_plays = parse_pbp_html(html, game, season, run_id)
+        parsed_plays = parse_pbp_html(html, game, season, run_id, team_prefix_memory)
         if not parsed_plays:
             zero_play_game_ids.append(game_id)
             failed_rows.append(

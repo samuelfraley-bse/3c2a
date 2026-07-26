@@ -707,7 +707,13 @@ def main_plays(argv: list[str] | None = None) -> int:
             f"delay={args.delay:.1f}s source_run_id={source_run_id}"
             f"{f' limit={args.limit}' if args.limit is not None else ''}"
         )
-        result = scrape_plays(games_rows, args.season, args.delay, run_id, source_run_id)
+        # Reuse whatever team-abbreviation crosswalk memory already exists
+        # for this season (e.g. "ARC" -> "American River") so mid-game
+        # possession resets like "Start of 5th quarter, ... ARC ball on
+        # ..." resolve correctly even when the team's own abbreviation
+        # isn't a plain substring of its canonical name.
+        team_prefix_memory = build_team_prefix_memory(_load_crosswalk_rows(conn, args.season))
+        result = scrape_plays(games_rows, args.season, args.delay, run_id, source_run_id, team_prefix_memory)
         insert_rows(conn, "raw_pbp_html", result["raw_pbp_rows"])
         log(f"WRITE plays insert start rows={len(result['plays_rows'])}")
         insert_rows(
@@ -785,6 +791,11 @@ def main_rebuild_plays_from_raw(argv: list[str] | None = None) -> int:
         )
         log("STAGE reparse")
 
+        # See main_plays: reuse existing team-abbreviation crosswalk memory
+        # so mid-game possession resets (e.g. OT "... ARC ball on ...")
+        # resolve correctly on reparse too, not just on first scrape.
+        team_prefix_memory = build_team_prefix_memory(_load_crosswalk_rows(conn, args.season))
+
         plays_rows: list[dict[str, object]] = []
         zero_play_game_ids: list[str] = []
         for index, raw_row in enumerate(raw_rows, start=1):
@@ -795,7 +806,7 @@ def main_rebuild_plays_from_raw(argv: list[str] | None = None) -> int:
                     f"Could not find canonical games row for game_id={game_id} "
                     f"from structure run {structure_run_id}"
                 )
-            parsed_rows = parse_pbp_html(str(raw_row["html_text"]), game, args.season, run_id)
+            parsed_rows = parse_pbp_html(str(raw_row["html_text"]), game, args.season, run_id, team_prefix_memory)
             if not parsed_rows:
                 zero_play_game_ids.append(game_id)
                 log(f"EMPTY reparse {game_id} -> 0 plays parsed")

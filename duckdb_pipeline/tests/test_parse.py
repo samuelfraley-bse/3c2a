@@ -443,6 +443,60 @@ class ParseTests(unittest.TestCase):
         self.assertTrue(rows[1]["completion"])
         self.assertEqual(rows[1]["yards_gained"], 6)
 
+    def test_parse_pbp_html_quarter_start_ball_on_abbreviation_needs_crosswalk_memory(self) -> None:
+        # Regression test for a real bug (2025-26 20251018_8uoz, American
+        # River @ Butte): "ARC" is American River's real abbreviation, but
+        # it isn't a plain substring/truncation of "American River" the way
+        # "BAKERSFI" is of "Bakersfield" above -- the naive substring check
+        # in _resolve_possession_from_text can't resolve it on its own, so
+        # without a crosswalk fallback the possession silently fails to
+        # flip and the whole drive (including a field goal) stayed
+        # mislabeled as the previous drive's team.
+        game = {
+            "game_id": "20251018_8uoz",
+            "schedule_home": "American River",
+            "schedule_away": "Butte",
+            "home_team_canonical": "American River",
+            "away_team_canonical": "Butte",
+        }
+        html = """
+        <html>
+          <body>
+            <table>
+              <tr><td id="qtr4">4th Quarter</td></tr>
+              <tr><th colspan="2">Butte at 01:32</th></tr>
+              <tr>
+                <td>1st and 10 at ARC29</td>
+                <td>Lane Garner field goal attempt from 29 GOOD, clock 01:32.</td>
+              </tr>
+              <tr><td id="qtr5">OT</td></tr>
+              <tr>
+                <td>1st and 10 at BUTTE18</td>
+                <td>Start of 5th quarter, clock 15:00, ARC ball on BUTTE25.</td>
+              </tr>
+              <tr>
+                <td>1st and 10 at BUTTE25</td>
+                <td>Nathan Crawford rush for 3 yards to the BUTTE22 (Jonah Flowers).</td>
+              </tr>
+            </table>
+          </body>
+        </html>
+        """
+        # Without crosswalk memory, the OT possession stays mislabeled
+        # "Butte" (carried over from the 4th-quarter FG) instead of
+        # flipping to American River.
+        rows_no_memory = parse_pbp_html(html, game, "2025-26", "run-ot-1")
+        self.assertEqual(rows_no_memory[1]["offense"], "Butte")
+        self.assertEqual(rows_no_memory[1]["defense"], "American River")
+
+        # With the season's existing field-position crosswalk memory
+        # (built the same way `build_team_prefix_memory` already does from
+        # `field_position_crosswalk`), the possession correctly flips.
+        team_prefix_memory = {"American River": {"ARC"}}
+        rows_with_memory = parse_pbp_html(html, game, "2025-26", "run-ot-2", team_prefix_memory)
+        self.assertEqual(rows_with_memory[1]["offense"], "American River")
+        self.assertEqual(rows_with_memory[1]["defense"], "Butte")
+
     def test_parse_pbp_html_explicit_drive_start_overrides_bad_drive_header(self) -> None:
         game = {
             "game_id": "20250927_6pu6",

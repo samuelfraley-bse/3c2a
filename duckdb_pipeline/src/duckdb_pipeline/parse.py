@@ -198,12 +198,17 @@ def _team_prefix_matches(team_name: str, recovered_text: str) -> bool:
     return common >= 2 or common == len(team_tokens)
 
 
+def _matches_known_prefix(token: str, prefixes: set[str]) -> bool:
+    return any(token == prefix or token in prefix or prefix in token for prefix in prefixes)
+
+
 def _resolve_possession_from_text(
     text: str,
     match_home: str,
     match_away: str,
     home_team: str,
     away_team: str,
+    team_prefix_memory: dict[str, set[str]] | None = None,
 ) -> tuple[str | None, str | None]:
     ball_on = re.search(r"([A-Z][A-Z\s]*?)\s+ball on", text)
     if not ball_on:
@@ -213,6 +218,19 @@ def _resolve_possession_from_text(
         return home_team, away_team
     if match_away.upper().startswith(token) or token in match_away.upper():
         return away_team, home_team
+    # Fallback for real abbreviations that aren't textual substrings/
+    # truncations of the canonical name (e.g. "ARC" for "American River") --
+    # the naive checks above only catch truncations like "BAKERSFI" for
+    # "Bakersfield". `team_prefix_memory` is the same {canonical_team:
+    # {known prefixes}} map already built from `field_position_crosswalk`'s
+    # human-reviewed resolutions elsewhere in this project (see
+    # `crosswalk.build_team_prefix_memory`) -- reused here rather than
+    # re-solving the same abbreviation-matching problem a second way.
+    if team_prefix_memory:
+        if _matches_known_prefix(token, team_prefix_memory.get(home_team) or set()):
+            return home_team, away_team
+        if _matches_known_prefix(token, team_prefix_memory.get(away_team) or set()):
+            return away_team, home_team
     return None, None
 
 
@@ -657,7 +675,13 @@ def build_games_rows(schedule_rows: list[dict[str, str]], season: str, run_id: s
     return games
 
 
-def parse_pbp_html(html: str, game: dict[str, str], season: str, run_id: str) -> list[dict[str, object]]:
+def parse_pbp_html(
+    html: str,
+    game: dict[str, str],
+    season: str,
+    run_id: str,
+    team_prefix_memory: dict[str, set[str]] | None = None,
+) -> list[dict[str, object]]:
     soup = BeautifulSoup(html, "html.parser")
     rows = soup.select("table tr")
 
@@ -725,6 +749,7 @@ def parse_pbp_html(html: str, game: dict[str, str], season: str, run_id: str) ->
                 match_away,
                 home_team,
                 away_team,
+                team_prefix_memory,
             )
             if next_offense:
                 offense, defense = next_offense, next_defense
@@ -735,6 +760,7 @@ def parse_pbp_html(html: str, game: dict[str, str], season: str, run_id: str) ->
             match_away,
             home_team,
             away_team,
+            team_prefix_memory,
         )
         if next_offense:
             offense, defense = next_offense, next_defense
