@@ -1455,6 +1455,145 @@ class DbTests(unittest.TestCase):
             self.assertEqual(defense_row, (2, 0, 1, 3, 33.3, 1))
             conn.close()
 
+    def test_kickoff_return_td_scores_to_return_team_not_kicking_team(self) -> None:
+        # Regression test for a real bug (2025-26 20250905_11sr, Butte @
+        # Laney): a kickoff-return touchdown's raw `plays.offense` stays the
+        # KICKING team throughout the play, so raw `is_td=True` on a kickoff
+        # row was being credited as the kicking team's own 6 points instead
+        # of the return team's -- confirmed wrong by the very next PAT
+        # attempt always belonging to the return team's own kicker.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = f"{tmpdir}/test.duckdb"
+            conn = connect(db_path)
+            init_db(conn)
+            insert_rows(
+                conn,
+                "pipeline_runs",
+                [
+                    {
+                        "run_id": "plays-ko",
+                        "season": "2025-26",
+                        "started_at": "2026-01-01 00:00:00",
+                        "finished_at": "2026-01-01 00:01:00",
+                        "status": "completed",
+                        "stage": "plays",
+                    },
+                ],
+            )
+
+            def base_play(play_id: int, offense: str, defense: str, **overrides: object) -> dict[str, object]:
+                row: dict[str, object] = {
+                    "run_id": "plays-ko",
+                    "season": "2025-26",
+                    "game_id": "g-ko",
+                    "home_team": "Kicker",
+                    "away_team": "Returner",
+                    "schedule_home": "Kicker",
+                    "schedule_away": "Returner",
+                    "play_id": play_id,
+                    "quarter": 1,
+                    "down": None,
+                    "distance": None,
+                    "offense": offense,
+                    "defense": defense,
+                    "play_type": "kickoff",
+                    "yards_gained": 0,
+                    "is_pass_attempt": False,
+                    "is_rush_attempt": False,
+                    "completion": False,
+                    "is_interception": False,
+                    "is_td": False,
+                    "is_conversion": False,
+                    "is_sack": False,
+                    "is_fumble": False,
+                    "fumble_recovered_by": None,
+                    "is_safety": False,
+                    "is_defensive_td": False,
+                    "is_penalty": False,
+                    "fg_result": None,
+                    "raw_text": "placeholder",
+                }
+                row.update(overrides)
+                return row
+
+            insert_rows(
+                conn,
+                "plays",
+                [
+                    # 1: Kicker kicks off to Returner, who returns it for a
+                    # touchdown. `offense` stays 'Kicker' (the kicking team)
+                    # in the raw parse, same as the real bug.
+                    base_play(
+                        1, "Kicker", "Returner",
+                        is_td=True,
+                        raw_text=(
+                            "Kicker kickoff 64 yards to the RETURNER01, "
+                            "Returner player return 99 yards, TOUCHDOWN, clock 05:04."
+                        ),
+                    ),
+                    # 2: the PAT is attempted by Returner's own kicker,
+                    # confirming the touchdown belongs to Returner.
+                    base_play(2, "Returner", "Kicker", play_type="pat", fg_result="good"),
+                    # 3: a second kickoff, this time the RETURN fumbles and
+                    # the KICKING team recovers it for their own score --
+                    # this must stay credited to the kicking team (Kicker),
+                    # not flip to Returner, since the fumble-recovery
+                    # crosswalk logic already resolves this correctly.
+                    base_play(
+                        3, "Kicker", "Returner",
+                        is_td=True,
+                        is_fumble=True,
+                        fumble_recovered_by="KICKERPRE Some Player",
+                        raw_text=(
+                            "Kicker kickoff 56 yards, Returner return 4 yards, "
+                            "fumble recovered by KICKERPRE Some Player, return 13 yards, "
+                            "TOUCHDOWN, clock 09:17."
+                        ),
+                    ),
+                    base_play(4, "Kicker", "Returner", play_type="pat", fg_result="good"),
+                ],
+            )
+            insert_rows(
+                conn,
+                "field_position_crosswalk",
+                [
+                    {
+                        "season": "2025-26",
+                        "source_plays_run_id": "plays-ko",
+                        "game_id": "g-ko",
+                        "prefix": "KICKERPRE",
+                        "canonical_team": "Kicker",
+                        "resolution_method": "manual",
+                        "note": "test fixture",
+                        "resolved_at": "2026-01-01 00:00:00",
+                    },
+                ],
+            )
+
+            points = {
+                row[0]: row[1:]
+                for row in conn.execute(
+                    """
+                    SELECT team_name, points_scored, points_allowed
+                    FROM v_team_season_points_ranked_current
+                    WHERE season = '2025-26'
+                    """
+                ).fetchall()
+            }
+            # Each team scores exactly once (a 6pt TD + a 1pt PAT = 7):
+            # Kicker via its own fumble-recovery TD (play 3), Returner via
+            # the kickoff-return TD (play 1) that must NOT land on Kicker.
+            # Pre-fix, this asserted (13, 1) instead of (7, 7) -- play 1's
+            # touchdown was wrongly credited to Kicker (the kicking team).
+            self.assertEqual(
+                points,
+                {
+                    "Kicker": (7, 7),
+                    "Returner": (7, 7),
+                },
+            )
+            conn.close()
+
     def test_field_position_is_stale_flips_when_plays_run_moves_on(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = f"{tmpdir}/test.duckdb"

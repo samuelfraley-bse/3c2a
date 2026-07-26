@@ -428,7 +428,7 @@ def _refresh_views(conn) -> None:
             -- Points scored on each play, attributed to home/away by
             -- schedule_home/schedule_away. Covers offensive TD/FG/PAT/two-
             -- point, safeties (2 to the defense), and defensive/return
-            -- touchdowns (6 to the defense) from two sources:
+            -- touchdowns (6 to the defense) from three sources:
             --   1. interception-return TD (pick-six): unambiguous from
             --      raw_text alone, resolved at parse time as
             --      `plays.is_defensive_td`.
@@ -444,6 +444,8 @@ def _refresh_views(conn) -> None:
             --      as a prefix, since `fumble_recovered_by` can carry that
             --      trailing junk); fall back to the parse-time `is_td` when
             --      no crosswalk entry exists yet for this game.
+            --   3. kickoff-return TD: unambiguous from `play_type='kickoff'`
+            --      alone -- see `is_kickoff_return_td` below.
             SELECT
                 p.season,
                 p.run_id,
@@ -474,7 +476,24 @@ def _refresh_views(conn) -> None:
                 p.play_type,
                 p.fg_result,
                 COALESCE(p.is_defensive_td, FALSE) AS is_pick_six,
-                COALESCE(p.is_safety, FALSE) AS is_safety
+                COALESCE(p.is_safety, FALSE) AS is_safety,
+                -- Kickoff-return touchdown: unlike fumbles/interceptions, a
+                -- kickoff play's `offense` field stays the kicking team even
+                -- when the receiving team returns it for a score, so raw
+                -- `is_td` on a kickoff row always means the DEFENSE (return
+                -- team) scored, never the offense -- confirmed by the PAT
+                -- immediately following such a play always being attempted
+                -- by the return team's own kicker. Excludes the (rare) case
+                -- where the kicking team forces and recovers a fumble on the
+                -- return for their own score, which the fumble-recovery
+                -- crosswalk logic above already resolves correctly on its
+                -- own and must stay untouched here.
+                (
+                    p.play_type = 'kickoff'
+                    AND COALESCE(p.is_td, FALSE)
+                    AND NOT COALESCE(p.is_conversion, FALSE)
+                    AND NOT COALESCE(p.is_fumble, FALSE)
+                ) AS is_kickoff_return_td
             FROM v_plays_current p
         ),
         scoring_totals AS (
@@ -489,6 +508,7 @@ def _refresh_views(conn) -> None:
                 defense,
                 CASE
                     WHEN fumble_recovery_is_defensive_td THEN 0
+                    WHEN is_kickoff_return_td THEN 0
                     WHEN is_td AND NOT COALESCE(is_conversion, FALSE) THEN 6
                     WHEN play_type = 'field_goal' AND fg_result = 'good' THEN 3
                     WHEN play_type = 'pat' AND fg_result = 'good' THEN 1
@@ -497,6 +517,7 @@ def _refresh_views(conn) -> None:
                 END AS offense_points,
                 CASE
                     WHEN fumble_recovery_is_defensive_td THEN 6
+                    WHEN is_kickoff_return_td THEN 6
                     WHEN is_pick_six THEN 6
                     WHEN is_safety THEN 2
                     ELSE 0
