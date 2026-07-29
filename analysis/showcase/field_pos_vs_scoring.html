@@ -1,0 +1,419 @@
+<title>Field Position vs. Scoring Rate — 2025-26</title>
+<style>
+  .viz-root {
+    color-scheme: light;
+    --surface:        #fcfcfb;
+    --page:           #f5f4f0;
+    --ink-primary:    #0b0b0b;
+    --ink-secondary:  #52514e;
+    --ink-muted:      #898781;
+    --gridline:       #e6e4dc;
+    --baseline:       #c3c2b7;
+    --border:         rgba(11,11,11,0.10);
+    --blue:           #2a78d6;
+    --blue-fill:      rgba(42,120,214,0.14);
+    --red:            #e34948;
+    --red-fill:       rgba(227,73,72,0.14);
+    --neutral-mid:    #f0efec;
+    --foothill:       #eda100;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:where(:not([data-theme="light"])) .viz-root {
+      color-scheme: dark;
+      --surface:        #1a1a19;
+      --page:           #121211;
+      --ink-primary:    #ffffff;
+      --ink-secondary:  #c3c2b7;
+      --ink-muted:      #8f8e88;
+      --gridline:       #2c2c2a;
+      --baseline:       #3a3a37;
+      --border:         rgba(255,255,255,0.10);
+      --blue:           #3987e5;
+      --blue-fill:      rgba(57,135,229,0.16);
+      --red:            #e66767;
+      --red-fill:       rgba(230,103,103,0.16);
+      --neutral-mid:    #383835;
+      --foothill:       #c98500;
+    }
+  }
+  :root[data-theme="dark"] .viz-root {
+    color-scheme: dark;
+    --surface:        #1a1a19;
+    --page:           #121211;
+    --ink-primary:    #ffffff;
+    --ink-secondary:  #c3c2b7;
+    --ink-muted:      #8f8e88;
+    --gridline:       #2c2c2a;
+    --baseline:       #3a3a37;
+    --border:         rgba(255,255,255,0.10);
+    --blue:           #3987e5;
+    --blue-fill:      rgba(57,135,229,0.16);
+    --red:            #e66767;
+    --red-fill:       rgba(230,103,103,0.16);
+    --neutral-mid:    #383835;
+    --foothill:       #c98500;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--page);
+    color: var(--ink-primary);
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  .viz-root {
+    max-width: 980px;
+    margin: 0 auto;
+    padding: 40px 24px 64px;
+  }
+  header {
+    margin-bottom: 22px;
+  }
+  .eyebrow {
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--ink-muted);
+    margin: 0 0 8px;
+  }
+  h1 {
+    font-size: 26px;
+    line-height: 1.2;
+    font-weight: 700;
+    margin: 0 0 8px;
+    text-wrap: balance;
+  }
+  .dek {
+    font-size: 15px;
+    line-height: 1.55;
+    color: var(--ink-secondary);
+    max-width: 62ch;
+    margin: 0;
+  }
+  .dek b { color: var(--ink-primary); font-weight: 600; }
+
+  .panel {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 20px 24px 12px;
+    margin-top: 20px;
+  }
+
+  .chart-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 16px;
+    flex-wrap: wrap;
+    margin-bottom: 4px;
+  }
+  .chart-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--ink-primary);
+  }
+  .legend {
+    display: flex;
+    gap: 18px;
+    font-size: 12.5px;
+    color: var(--ink-secondary);
+  }
+  .legend-item { display: flex; align-items: center; gap: 6px; }
+  .swatch { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+
+  svg { display: block; width: 100%; height: auto; overflow: visible; }
+  .axis-label {
+    font-size: 12px;
+    fill: var(--ink-muted);
+  }
+  .tick-label {
+    font-size: 11px;
+    fill: var(--ink-muted);
+    font-variant-numeric: tabular-nums;
+  }
+  .grid-line { stroke: var(--gridline); stroke-width: 1; }
+  .baseline { stroke: var(--baseline); stroke-width: 1; }
+  .reg-line { stroke: var(--ink-muted); stroke-width: 2; stroke-dasharray: 5 4; fill: none; }
+
+  .pt {
+    stroke: var(--surface);
+    stroke-width: 1.25;
+    cursor: pointer;
+    transition: r 0.1s ease;
+  }
+  .pt:hover { stroke-width: 2; }
+  .pt-foothill {
+    stroke: var(--foothill);
+    stroke-width: 2.5;
+  }
+  .direct-label {
+    font-size: 11px;
+    font-weight: 600;
+    fill: var(--ink-secondary);
+    pointer-events: none;
+  }
+  .direct-label.foothill { fill: var(--foothill); font-weight: 700; }
+
+  .tooltip {
+    position: absolute;
+    pointer-events: none;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 8px 11px;
+    font-size: 12.5px;
+    line-height: 1.5;
+    box-shadow: 0 6px 20px rgba(0,0,0,0.14);
+    opacity: 0;
+    transition: opacity 0.08s ease;
+    z-index: 5;
+    white-space: nowrap;
+  }
+  .tooltip .tt-team { font-weight: 700; color: var(--ink-primary); }
+  .tooltip .tt-row { color: var(--ink-secondary); font-variant-numeric: tabular-nums; }
+  .tooltip .tt-resid.up { color: var(--blue); font-weight: 600; }
+  .tooltip .tt-resid.down { color: var(--red); font-weight: 600; }
+
+  .foot {
+    margin-top: 10px;
+    padding-top: 12px;
+    border-top: 1px solid var(--gridline);
+    font-size: 12px;
+    line-height: 1.6;
+    color: var(--ink-muted);
+  }
+
+  details.table-toggle {
+    margin-top: 18px;
+  }
+  details.table-toggle summary {
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--ink-secondary);
+    padding: 4px 0;
+  }
+  .table-wrap { overflow-x: auto; margin-top: 10px; }
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    font-size: 12.5px;
+  }
+  th, td {
+    text-align: left;
+    padding: 6px 10px;
+    border-bottom: 1px solid var(--gridline);
+    white-space: nowrap;
+  }
+  th {
+    color: var(--ink-muted);
+    font-weight: 600;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    cursor: pointer;
+    user-select: none;
+  }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  td.resid-up { color: var(--blue); font-weight: 600; }
+  td.resid-down { color: var(--red); font-weight: 600; }
+  tr.row-foothill td { background: color-mix(in srgb, var(--foothill) 12%, transparent); font-weight: 600; }
+</style>
+
+<div class="viz-root">
+  <header>
+    <p class="eyebrow">2025&#8211;26 Season &middot; Offense &middot; 65 teams, min. 6 games</p>
+    <h1>Field position doesn&rsquo;t guarantee points &mdash; some offenses turn it into more</h1>
+    <p class="dek">Average starting field position (yards from own goal) plotted against the share of drives that end in a score. The dashed line is the league trend &mdash; teams <b style="color:var(--blue)">above it</b> score more than their field position alone predicts; teams <b style="color:var(--red)">below it</b> score less. Correlation is moderate (r&nbsp;=&nbsp;0.59): field position matters, but it&rsquo;s far from the whole story.</p>
+  </header>
+
+  <div class="panel">
+    <div class="chart-head">
+      <div class="chart-title">Avg. Starting Field Position vs. % Drives Scored</div>
+      <div class="legend">
+        <span class="legend-item"><span class="swatch" style="background:var(--blue)"></span>Outperforming trend</span>
+        <span class="legend-item"><span class="swatch" style="background:var(--red)"></span>Underperforming trend</span>
+        <span class="legend-item"><span class="swatch" style="background:none;border:2.5px solid var(--foothill)"></span>Foothill</span>
+      </div>
+    </div>
+    <svg id="chart" viewBox="0 0 900 560" role="img" aria-label="Scatter plot of starting field position versus scoring rate per drive for 65 teams"></svg>
+    <div class="foot">
+      Field position measured in yards from own goal line (higher = better starting spot). Scoring rate = drives ending in a TD or FG, all drives. Feather River (7 GP) and Gavilan (6 GP) carry known play-by-play coverage gaps per pipeline logs &mdash; read their placement with extra caution. Source: <code>v_team_season_drives_offense_current</code>, season 2025-26.
+    </div>
+  </div>
+
+  <details class="table-toggle">
+    <summary>View as table (sortable)</summary>
+    <div class="table-wrap">
+      <table id="data-table">
+        <thead>
+          <tr>
+            <th data-key="team_name">Team</th>
+            <th class="num" data-key="games">GP</th>
+            <th class="num" data-key="start_from_own">Start (own-yard)</th>
+            <th class="num" data-key="score_rate">Score Rate</th>
+            <th class="num" data-key="resid">Vs. Trend</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </details>
+</div>
+
+<div class="tooltip" id="tooltip"></div>
+
+<script>
+const DATA = {"points": [{"team_name": "Allan Hancock", "games": 9, "start_from_own": 39.728070175438596, "score_rate": 29.82456140350877, "resid": -6.146050507633664}, {"team_name": "American River", "games": 11, "start_from_own": 37.51798561151079, "score_rate": 31.654676258992804, "resid": -0.34538587245802077}, {"team_name": "Antelope Valley", "games": 10, "start_from_own": 45.091503267973856, "score_rate": 45.751633986928105, "resid": 0.14529209896105044}, {"team_name": "Bakersfield", "games": 10, "start_from_own": 39.96268656716418, "score_rate": 35.82089552238806, "resid": -0.571218840598327}, {"team_name": "Butte", "games": 11, "start_from_own": 42.15172413793103, "score_rate": 37.241379310344826, "resid": -3.08347264386655}, {"team_name": "Cabrillo", "games": 9, "start_from_own": 36.52845528455285, "score_rate": 27.642276422764226, "resid": -2.5800349900813657}, {"team_name": "Canyons", "games": 10, "start_from_own": 34.70769230769231, "score_rate": 25.384615384615383, "resid": -1.5665858840120386}, {"team_name": "Cerritos", "games": 11, "start_from_own": 37.8962962962963, "score_rate": 46.666666666666664, "resid": 13.986946647618751}, {"team_name": "Chabot", "games": 9, "start_from_own": 40.45528455284553, "score_rate": 15.447154471544716, "resid": -21.829941785549636}, {"team_name": "Chaffey", "games": 10, "start_from_own": 35.267605633802816, "score_rate": 28.169014084507044, "resid": 0.21189486598751373}, {"team_name": "Citrus", "games": 11, "start_from_own": 37.554794520547944, "score_rate": 42.465753424657535, "resid": 10.399561875331209}, {"team_name": "Coalinga", "games": 11, "start_from_own": 41.61224489795919, "score_rate": 38.775510204081634, "resid": -0.5801348643934148}, {"team_name": "Compton", "games": 8, "start_from_own": 31.643564356435647, "score_rate": 1.9801980198019802, "resid": -19.4661131824531}, {"team_name": "Contra Costa", "games": 9, "start_from_own": 31.43518518518519, "score_rate": 16.666666666666668, "resid": -4.405278827594696}, {"team_name": "De Anza", "games": 11, "start_from_own": 45.993197278911566, "score_rate": 51.02040816326531, "resid": 3.794118778757621}, {"team_name": "Desert", "games": 9, "start_from_own": 38.1578947368421, "score_rate": 33.83458646616541, "resid": 0.6848891225255329}, {"team_name": "Diablo Valley", "games": 12, "start_from_own": 38.87837837837838, "score_rate": 41.891891891891895, "resid": 7.447802373914058}, {"team_name": "East Los Angeles", "games": 10, "start_from_own": 29.357664233576642, "score_rate": 19.708029197080293, "resid": 2.3684749838357533}, {"team_name": "El Camino", "games": 11, "start_from_own": 35.95302013422818, "score_rate": 41.61073825503356, "resid": 12.42223068238485}, {"team_name": "Feather River", "games": 7, "start_from_own": 44.53012048192771, "score_rate": 57.83132530120482, "resid": 13.233541336241757}, {"team_name": "Foothill", "games": 11, "start_from_own": 39.083969465648856, "score_rate": 26.717557251908396, "resid": -8.095889013585733}, {"team_name": "Fresno City", "games": 12, "start_from_own": 38.52517985611511, "score_rate": 40.28776978417266, "resid": 6.478222644187582}, {"team_name": "Fullerton", "games": 11, "start_from_own": 42.953947368421055, "score_rate": 42.76315789473684, "resid": 0.9970636808063489}, {"team_name": "Gavilan", "games": 6, "start_from_own": 38.951219512195124, "score_rate": 18.29268292682927, "resid": -16.282270066939997}, {"team_name": "Glendale", "games": 10, "start_from_own": 42.99180327868852, "score_rate": 43.442622950819676, "resid": 1.6085183183623144}, {"team_name": "Golden West", "games": 13, "start_from_own": 42.960893854748605, "score_rate": 45.25139664804469, "resid": 3.4728226538344487}, {"team_name": "Grossmont", "games": 11, "start_from_own": 42.316901408450704, "score_rate": 42.95774647887324, "resid": 2.336143628439885}, {"team_name": "LA Pierce", "games": 10, "start_from_own": 32.552447552447546, "score_rate": 13.286713286713287, "resid": -9.792461215250505}, {"team_name": "LA Southwest", "games": 9, "start_from_own": 40.458015267175576, "score_rate": 25.19083969465649, "resid": -12.091162454890373}, {"team_name": "LA Valley", "games": 9, "start_from_own": 39.95275590551181, "score_rate": 25.19685039370079, "resid": -11.177422938639271}, {"team_name": "Laney", "games": 10, "start_from_own": 39.66225165562914, "score_rate": 24.503311258278146, "resid": -11.34905372530573}, {"team_name": "Long Beach", "games": 10, "start_from_own": 36.47727272727273, "score_rate": 33.333333333333336, "resid": 3.2029744615124542}, {"team_name": "Los Medanos", "games": 10, "start_from_own": 37.208, "score_rate": 56.8, "resid": 25.356845654604335}, {"team_name": "Merced", "games": 9, "start_from_own": 37.017391304347825, "score_rate": 35.65217391304348, "resid": 4.5514595479461235}, {"team_name": "Modesto", "games": 12, "start_from_own": 38.4113475177305, "score_rate": 41.843971631205676, "resid": 8.238931130229709}, {"team_name": "Monterey Peninsula", "games": 11, "start_from_own": 34.61971830985915, "score_rate": 30.281690140845072, "resid": 3.488539447936006}, {"team_name": "Moorpark", "games": 11, "start_from_own": 36.11875, "score_rate": 31.25, "resid": 1.7637487605392224}, {"team_name": "Mt. San Antonio", "games": 10, "start_from_own": 39.78358208955224, "score_rate": 49.25373134328358, "resid": 13.183388941303065}, {"team_name": "Mt. San Jacinto", "games": 10, "start_from_own": 39.08275862068965, "score_rate": 28.275862068965516, "resid": -6.535408840768724}, {"team_name": "Orange Coast", "games": 10, "start_from_own": 32.372262773722625, "score_rate": 12.408759124087592, "resid": -10.346702590977888}, {"team_name": "Palomar", "games": 10, "start_from_own": 38.59722222222222, "score_rate": 28.47222222222222, "resid": -5.4667533593455175}, {"team_name": "Pasadena City", "games": 11, "start_from_own": 40.23841059602649, "score_rate": 37.086092715231786, "resid": 0.19862355907437035}, {"team_name": "Redwoods", "games": 10, "start_from_own": 33.38167938931298, "score_rate": 26.717557251908396, "resid": 2.1486179052330527}, {"team_name": "Reedley", "games": 10, "start_from_own": 32.85483870967742, "score_rate": 21.774193548387096, "resid": -1.8482448459709033}, {"team_name": "Riverside", "games": 11, "start_from_own": 36.174157303370784, "score_rate": 48.87640449438202, "resid": 19.290610703571446}, {"team_name": "Sacramento City", "games": 10, "start_from_own": 37.744360902255636, "score_rate": 24.81203007518797, "resid": -7.594728874776067}, {"team_name": "Saddleback", "games": 12, "start_from_own": 42.35403726708075, "score_rate": 44.72049689440994, "resid": 4.03217724150268}, {"team_name": "San Bernardino Valley", "games": 11, "start_from_own": 46.033112582781456, "score_rate": 43.04635761589404, "resid": -4.251642011548988}, {"team_name": "San Diego Mesa", "games": 10, "start_from_own": 37.669172932330824, "score_rate": 33.08270676691729, "resid": 0.8110275248943282}, {"team_name": "San Francisco", "games": 11, "start_from_own": 33.55, "score_rate": 40.0, "resid": 15.128662557528209}, {"team_name": "San Joaquin Delta", "games": 10, "start_from_own": 44.44915254237288, "score_rate": 34.74576271186441, "resid": -9.70655748225083}, {"team_name": "San Jose", "games": 10, "start_from_own": 35.517006802721085, "score_rate": 17.687074829931973, "resid": -10.718108581454167}, {"team_name": "San Mateo", "games": 13, "start_from_own": 42.53409090909091, "score_rate": 40.34090909090909, "resid": -0.670887753905042}, {"team_name": "Santa Ana", "games": 10, "start_from_own": 38.32116788321168, "score_rate": 18.248175182481752, "resid": -15.194852183876861}, {"team_name": "Santa Barbara", "games": 9, "start_from_own": 33.89915966386555, "score_rate": 15.966386554621849, "resid": -9.532237213932731}, {"team_name": "Santa Monica", "games": 11, "start_from_own": 44.32098765432099, "score_rate": 41.97530864197531, "resid": -2.2467556260434947}, {"team_name": "Santa Rosa", "games": 10, "start_from_own": 36.697841726618705, "score_rate": 25.899280575539567, "resid": -4.627343763247669}, {"team_name": "Sequoias", "games": 11, "start_from_own": 37.548611111111114, "score_rate": 34.72222222222222, "resid": 2.667139539668625}, {"team_name": "Shasta", "games": 10, "start_from_own": 35.013888888888886, "score_rate": 24.305555555555557, "resid": -3.1957462783876522}, {"team_name": "Sierra", "games": 10, "start_from_own": 36.09375, "score_rate": 37.5, "resid": 8.05866276342963}, {"team_name": "Siskiyous", "games": 9, "start_from_own": 43.68333333333333, "score_rate": 40.833333333333336, "resid": -2.24314661404874}, {"team_name": "Southwestern", "games": 11, "start_from_own": 38.30821917808219, "score_rate": 40.41095890410959, "resid": 6.991194664935485}, {"team_name": "Ventura", "games": 12, "start_from_own": 38.30061349693251, "score_rate": 53.987730061349694, "resid": 20.581629885581187}, {"team_name": "Victor Valley", "games": 9, "start_from_own": 38.21212121212121, "score_rate": 44.696969696969695, "resid": 11.449851230632916}, {"team_name": "West LA", "games": 11, "start_from_own": 44.47761194029851, "score_rate": 37.3134328358209, "resid": -7.190016377521985}], "slope": 1.796560115616147, "intercept": -35.403254436449934, "r": 0.5902637186226697};
+
+const pts = DATA.points;
+const slope = DATA.slope, intercept = DATA.intercept;
+
+const W = 900, H = 560;
+const M = { top: 18, right: 24, bottom: 52, left: 56 };
+const plotW = W - M.left - M.right;
+const plotH = H - M.top - M.bottom;
+
+const xExtent = [25, 50];
+const yExtent = [0, 60];
+
+function xScale(v) { return M.left + (v - xExtent[0]) / (xExtent[1] - xExtent[0]) * plotW; }
+function yScale(v) { return M.top + plotH - (v - yExtent[0]) / (yExtent[1] - yExtent[0]) * plotH; }
+
+const svg = document.getElementById('chart');
+const NS = 'http://www.w3.org/2000/svg';
+function el(tag, attrs) {
+  const e = document.createElementNS(NS, tag);
+  for (const k in attrs) e.setAttribute(k, attrs[k]);
+  return e;
+}
+
+// gridlines + ticks (x: every 5 yards, y: every 10%)
+for (let x = 25; x <= 50; x += 5) {
+  svg.appendChild(el('line', { class: 'grid-line', x1: xScale(x), x2: xScale(x), y1: M.top, y2: M.top + plotH }));
+  const t = el('text', { class: 'tick-label', x: xScale(x), y: M.top + plotH + 20, 'text-anchor': 'middle' });
+  t.textContent = 'Own ' + x;
+  svg.appendChild(t);
+}
+for (let y = 0; y <= 60; y += 10) {
+  svg.appendChild(el('line', { class: 'grid-line', x1: M.left, x2: M.left + plotW, y1: yScale(y), y2: yScale(y) }));
+  const t = el('text', { class: 'tick-label', x: M.left - 10, y: yScale(y) + 4, 'text-anchor': 'end' });
+  t.textContent = y + '%';
+  svg.appendChild(t);
+}
+svg.appendChild(el('line', { class: 'baseline', x1: M.left, x2: M.left + plotW, y1: M.top + plotH, y2: M.top + plotH }));
+svg.appendChild(el('line', { class: 'baseline', x1: M.left, x2: M.left, y1: M.top, y2: M.top + plotH }));
+
+// axis titles
+const xTitle = el('text', { class: 'axis-label', x: M.left + plotW / 2, y: H - 6, 'text-anchor': 'middle' });
+xTitle.textContent = 'Average Starting Field Position (own-yard line)';
+svg.appendChild(xTitle);
+const yTitle = el('text', { class: 'axis-label', x: -(M.top + plotH / 2), y: 16, 'text-anchor': 'middle', transform: 'rotate(-90)' });
+yTitle.textContent = '% of Drives That Score';
+svg.appendChild(yTitle);
+
+// regression line, clipped to plot x-domain
+const rx1 = xExtent[0], rx2 = xExtent[1];
+const ry1 = slope * rx1 + intercept, ry2 = slope * rx2 + intercept;
+svg.appendChild(el('line', {
+  class: 'reg-line',
+  x1: xScale(rx1), y1: yScale(Math.max(yExtent[0], Math.min(yExtent[1], ry1))),
+  x2: xScale(rx2), y2: yScale(Math.max(yExtent[0], Math.min(yExtent[1], ry2)))
+}));
+
+// direct-label set: Foothill + top3 / bottom3 residual
+const sorted = [...pts].sort((a, b) => b.resid - a.resid);
+const labelSet = new Set([
+  'Foothill',
+  ...sorted.slice(0, 3).map(d => d.team_name),
+  ...sorted.slice(-3).map(d => d.team_name)
+]);
+
+const tooltip = document.getElementById('tooltip');
+
+pts.forEach(d => {
+  const cx = xScale(d.start_from_own);
+  const cy = yScale(d.score_rate);
+  const isFoothill = d.team_name === 'Foothill';
+  const color = d.resid >= 0 ? 'var(--blue)' : 'var(--red)';
+  const circ = el('circle', {
+    class: 'pt' + (isFoothill ? ' pt-foothill' : ''),
+    cx, cy,
+    r: isFoothill ? 8 : 6,
+    fill: isFoothill ? 'var(--surface)' : color,
+    'fill-opacity': isFoothill ? 1 : 0.88
+  });
+  svg.appendChild(circ);
+
+  if (isFoothill) {
+    const dot = el('circle', { cx, cy, r: 3, fill: 'var(--foothill)' });
+    svg.appendChild(dot);
+  }
+
+  if (labelSet.has(d.team_name)) {
+    const above = d.resid >= 0;
+    const lbl = el('text', {
+      class: 'direct-label' + (isFoothill ? ' foothill' : ''),
+      x: cx, y: above ? cy - 11 : cy + 18,
+      'text-anchor': 'middle'
+    });
+    lbl.textContent = d.team_name;
+    svg.appendChild(lbl);
+  }
+
+  circ.addEventListener('mousemove', (e) => showTip(e, d));
+  circ.addEventListener('mouseleave', hideTip);
+});
+
+function showTip(e, d) {
+  const sign = d.resid >= 0 ? '+' : '';
+  const cls = d.resid >= 0 ? 'up' : 'down';
+  tooltip.innerHTML =
+    '<div class="tt-team">' + d.team_name + '</div>' +
+    '<div class="tt-row">' + d.games + ' games &middot; started own ' + d.start_from_own.toFixed(1) + '</div>' +
+    '<div class="tt-row">Score rate: ' + d.score_rate.toFixed(1) + '%</div>' +
+    '<div class="tt-resid ' + cls + '">' + sign + d.resid.toFixed(1) + ' pts vs. trend</div>';
+  tooltip.style.opacity = 1;
+  const rect = svg.getBoundingClientRect();
+  const px = rect.left + window.scrollX + (e.offsetX / svg.clientWidth) * W * (rect.width / W);
+  tooltip.style.left = (e.clientX + window.scrollX + 14) + 'px';
+  tooltip.style.top = (e.clientY + window.scrollY - 10) + 'px';
+}
+function hideTip() { tooltip.style.opacity = 0; }
+
+// table
+const tbody = document.querySelector('#data-table tbody');
+function renderTable(rows) {
+  tbody.innerHTML = '';
+  rows.forEach(d => {
+    const tr = document.createElement('tr');
+    if (d.team_name === 'Foothill') tr.className = 'row-foothill';
+    const residCls = d.resid >= 0 ? 'resid-up' : 'resid-down';
+    const sign = d.resid >= 0 ? '+' : '';
+    tr.innerHTML =
+      '<td>' + d.team_name + '</td>' +
+      '<td class="num">' + d.games + '</td>' +
+      '<td class="num">' + d.start_from_own.toFixed(1) + '</td>' +
+      '<td class="num">' + d.score_rate.toFixed(1) + '%</td>' +
+      '<td class="num ' + residCls + '">' + sign + d.resid.toFixed(1) + '</td>';
+    tbody.appendChild(tr);
+  });
+}
+renderTable([...pts].sort((a, b) => b.resid - a.resid));
+
+let sortKey = 'resid', sortDir = -1;
+document.querySelectorAll('#data-table th').forEach(th => {
+  th.addEventListener('click', () => {
+    const key = th.dataset.key;
+    sortDir = (key === sortKey) ? -sortDir : (key === 'team_name' ? 1 : -1);
+    sortKey = key;
+    const rows = [...pts].sort((a, b) => {
+      if (typeof a[key] === 'string') return sortDir * a[key].localeCompare(b[key]);
+      return sortDir * (a[key] - b[key]);
+    });
+    renderTable(rows);
+  });
+});
+</script>
